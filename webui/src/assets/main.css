@@ -1,0 +1,67 @@
+:root {
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: #f3f6ff;
+  background:
+    radial-gradient(circle at top, rgba(122, 183, 255, 0.18), transparent 35%),
+    linear-gradient(160deg, #050913 0%, #0b1425 44%, #101d34 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --el-color-primary: #c9924e;
+  --el-color-primary-light-3: #dcb279;
+  --el-color-primary-light-5: #e7c79a;
+  --el-color-primary-light-7: #f0dbbb;
+  --el-color-primary-light-8: #f5e6cd;
+  --el-color-primary-light-9: #f9f1e5;
+  --el-color-primary-dark-2: #a8702d;
+  --el-bg-color: rgba(9, 18, 34, 0.82);
+  --el-bg-color-overlay: #0b162b;
+  --el-border-color: rgba(169, 127, 68, 0.24);
+  --el-text-color-primary: #f3f6ff;
+  --el-text-color-regular: rgba(226, 233, 245, 0.8);
+  --el-fill-color-blank: rgba(7, 15, 28, 0.85);
+  --el-color-primary-rgb: 201, 146, 78;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px),
+    radial-gradient(circle at 70% 12%, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px),
+    radial-gradient(circle at 82% 64%, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px),
+    radial-gradient(circle at 30% 76%, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px);
+}
+
+a {
+  color: inherit;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.el-transfer {
+  gap: 14px;
+}

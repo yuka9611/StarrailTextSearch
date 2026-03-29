@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>星铁文本搜索</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a1224;
+      --panel: rgba(11, 22, 43, 0.88);
+      --line: rgba(188, 164, 107, 0.28);
+      --text: #eff5ff;
+      --muted: #a9b7cf;
+      --accent: #d4b46d;
+      --accent-2: #7ab7ff;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top, rgba(122, 183, 255, 0.16), transparent 40%),
+        linear-gradient(160deg, #050913 0%, #0a1224 45%, #111c34 100%);
+    }
+
+    .card {
+      width: min(720px, 100%);
+      padding: 32px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 30px;
+    }
+
+    p {
+      margin: 0 0 16px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    code {
+      color: var(--accent-2);
+    }
+
+    ol {
+      margin: 0;
+      padding-left: 20px;
+      color: var(--text);
+      line-height: 1.9;
+    }
+
+    strong {
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>星铁文本搜索前端尚未构建</h1>
+    <p>后端已经可以提供 <code>/api/meta</code> 和 <code>/api/search</code>，但首页需要先构建 Vue 前端。</p>
+    <ol>
+      <li>进入 <code>webui</code> 目录</li>
+      <li>执行 <code>npm install</code></li>
+      <li>执行 <code>npm run build</code></li>
+      <li>重新刷新当前页面</li>
+    </ol>
+    <p><strong>数据源默认路径：</strong> 项目同级目录下的 <code>../turnbasedgamedata</code></p>
+  </main>
+</body>
+</html>
