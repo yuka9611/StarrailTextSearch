@@ -309,7 +309,7 @@ h2 {
   margin-top: 20px;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 1180px) {
   .filterGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

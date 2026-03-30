@@ -7,11 +7,11 @@
       </div>
       <div class="headerMeta">
         <span class="langCount">{{ visibleTranslations.length }} 种语言</span>
-        <span v-if="result.sourceCount" class="sourceCount">{{ result.sourceCount }} 个来源</span>
+        <span v-if="showSourcePanel && hasMultipleSources" class="sourceCount">{{ result.sourceCount }} 个来源</span>
       </div>
     </div>
 
-    <div class="sourcePanel">
+    <div v-if="showSourcePanel" class="sourcePanel">
       <div class="sourceText">
         <span class="sourceType">{{ sourceLabel }}</span>
         <StylizedText :text="primarySource.title || '未归类文本'" class="sourceTitle" />
@@ -25,7 +25,7 @@
         >
           来源详情
         </el-button>
-        <el-button size="small" plain @click="openTextDetail">
+        <el-button v-if="hasMultipleSources" size="small" plain @click="openTextDetail">
           全部来源
         </el-button>
       </div>
@@ -90,6 +90,7 @@ const props = defineProps({
 })
 
 const router = useRouter()
+const knownSourceTypes = new Set(['mission', 'message', 'book', 'voice', 'story'])
 
 const visibleTranslations = computed(() => {
   const translates = props.result.translates || {}
@@ -124,6 +125,22 @@ const visibleTranslations = computed(() => {
 })
 
 const primarySource = computed(() => props.result.primarySource || {})
+const showSourcePanel = computed(() => {
+  const sourceType = primarySource.value.sourceType || ''
+  const title = primarySource.value.title || ''
+
+  if (!sourceType && !title) {
+    return false
+  }
+
+  if (sourceType === 'unknown') {
+    return false
+  }
+
+  return knownSourceTypes.has(sourceType) || !title.startsWith('未归类文本')
+})
+
+const hasMultipleSources = computed(() => Number(props.result.sourceCount || 0) > 1)
 
 const sourceLabel = computed(() => {
   const mapping = {

@@ -268,12 +268,21 @@ watch(
 .navMenu {
   border-right: none;
   background: transparent;
+  --el-menu-hover-bg-color: rgba(122, 183, 255, 0.14);
+  --el-menu-hover-text-color: #f6f8ff;
 }
 
 .navMenu :deep(.el-menu-item) {
   margin-bottom: 8px;
   border-radius: 16px;
   color: rgba(232, 238, 252, 0.8);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.navMenu :deep(.el-menu-item:hover),
+.navMenu :deep(.el-menu-item:focus-visible) {
+  color: #f6f8ff;
+  background: rgba(122, 183, 255, 0.14);
 }
 
 .navMenu :deep(.el-menu-item.is-active) {
