@@ -1,15 +1,33 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { searchText } from '@/api/textSearch'
 import ResultCard from '@/components/ResultCard.vue'
-import SearchBar from '@/components/SearchBar.vue'
-import { appState, ensureMetaLoaded, getSearchPreferences } from '@/stores/appState'
+import SearchPager from '@/components/SearchPager.vue'
+import {
+  appState,
+  ensureMetaLoaded,
+  getSearchPreferences,
+  getViewState,
+  saveViewState
+} from '@/stores/appState'
 
 const PAGE_SIZE = 30
+const VIEW_KEY = 'search'
+
+const sourceTypeOptions = [
+  { value: 'mission', label: '任务' },
+  { value: 'message', label: '短信' },
+  { value: 'book', label: '书籍' },
+  { value: 'voice', label: '角色语音' },
+  { value: 'story', label: '角色故事' }
+]
 
 const keyword = ref('')
 const selectedLanguage = ref('chs')
+const selectedSourceTypes = ref([])
+const createdVersion = ref('')
+const updatedVersion = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
 const results = ref([])
@@ -17,24 +35,48 @@ const total = ref(0)
 const currentPage = ref(1)
 const hasSearched = ref(false)
 const activeResultLanguages = ref([])
+const activeSourceLanguage = ref('chs')
 
-const totalPages = computed(() => {
-  if (total.value === 0) {
-    return 1
-  }
-  return Math.ceil(total.value / PAGE_SIZE)
-})
-
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 const languageLabelMap = computed(() =>
   Object.fromEntries(appState.languages.map((item) => [item.code, item.label]))
+)
+
+watch(
+  [keyword, selectedLanguage, selectedSourceTypes, createdVersion, updatedVersion, currentPage, hasSearched],
+  () => {
+    saveViewState(VIEW_KEY, {
+      keyword: keyword.value,
+      selectedLanguage: selectedLanguage.value,
+      selectedSourceTypes: [...selectedSourceTypes.value],
+      createdVersion: createdVersion.value,
+      updatedVersion: updatedVersion.value,
+      currentPage: currentPage.value,
+      hasSearched: hasSearched.value
+    })
+  },
+  { deep: true }
 )
 
 onMounted(async () => {
   try {
     await ensureMetaLoaded()
     const preferences = getSearchPreferences()
-    selectedLanguage.value = preferences.defaultLanguage
+    const snapshot = getViewState(VIEW_KEY, {})
+
+    selectedLanguage.value = snapshot.selectedLanguage || preferences.defaultLanguage
     activeResultLanguages.value = preferences.resultLanguages
+    activeSourceLanguage.value = preferences.sourceLanguage
+    keyword.value = snapshot.keyword || ''
+    selectedSourceTypes.value = (snapshot.selectedSourceTypes || []).filter((item) =>
+      sourceTypeOptions.some((option) => option.value === item)
+    )
+    createdVersion.value = snapshot.createdVersion || ''
+    updatedVersion.value = snapshot.updatedVersion || ''
+
+    if (snapshot.hasSearched && keyword.value.trim()) {
+      await onSearch(snapshot.currentPage || 1)
+    }
   } catch (error) {
     errorMessage.value = appState.metaError || '加载语言列表失败。'
   }
@@ -48,7 +90,7 @@ async function onSearch(page = 1) {
     hasSearched.value = false
     results.value = []
     total.value = 0
-    errorMessage.value = '请输入要搜索的关键词。'
+    currentPage.value = 1
     return
   }
 
@@ -61,6 +103,7 @@ async function onSearch(page = 1) {
   currentPage.value = page
   const preferences = getSearchPreferences(selectedLanguage.value)
   activeResultLanguages.value = preferences.resultLanguages
+  activeSourceLanguage.value = preferences.sourceLanguage
 
   try {
     const payload = await searchText({
@@ -69,13 +112,18 @@ async function onSearch(page = 1) {
       page,
       size: PAGE_SIZE,
       resultLangs: preferences.resultLanguages,
+      sourceLang: preferences.sourceLanguage,
       playerName: preferences.playerName,
-      playerGender: preferences.playerGender
+      playerGender: preferences.playerGender,
+      createdVersion: createdVersion.value,
+      updatedVersion: updatedVersion.value,
+      sourceTypes: selectedSourceTypes.value
     })
     results.value = payload.results || []
     total.value = payload.total || 0
     currentPage.value = payload.page || page
     activeResultLanguages.value = payload.resultLangs || preferences.resultLanguages
+    activeSourceLanguage.value = payload.sourceLang || preferences.sourceLanguage
     hasSearched.value = true
   } catch (error) {
     results.value = []
@@ -86,21 +134,66 @@ async function onSearch(page = 1) {
     loading.value = false
   }
 }
-
-function onPageChange(page) {
-  onSearch(page)
-}
 </script>
 
 <template>
   <section class="pageSection">
-    <div class="panel">
-      <SearchBar
-        v-model:keyword="keyword"
-        v-model:language="selectedLanguage"
-        :languages="appState.languages"
-        @search="onSearch(1)"
-      />
+    <div class="panel stickyPanel">
+      <div class="filterGrid">
+        <el-select v-model="selectedLanguage" placeholder="搜索语言">
+          <el-option
+            v-for="item in appState.languages"
+            :key="item.code"
+            :label="item.label"
+            :value="item.code"
+          />
+        </el-select>
+
+        <el-input
+          v-model="keyword"
+          placeholder="输入要检索的关键词"
+          clearable
+          @keyup.enter="onSearch(1)"
+        />
+
+        <el-select
+          v-model="selectedSourceTypes"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          placeholder="限制来源类型"
+          clearable
+        >
+          <el-option
+            v-for="item in sourceTypeOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+
+        <el-select v-model="createdVersion" placeholder="创建版本" clearable>
+          <el-option
+            v-for="item in appState.versions"
+            :key="`created-${item}`"
+            :label="item"
+            :value="item"
+          />
+        </el-select>
+
+        <el-select v-model="updatedVersion" placeholder="更新版本" clearable>
+          <el-option
+            v-for="item in appState.versions"
+            :key="`updated-${item}`"
+            :label="item"
+            :value="item"
+          />
+        </el-select>
+
+        <el-button type="primary" class="searchButton" @click="onSearch(1)">
+          搜索
+        </el-button>
+      </div>
     </div>
 
     <el-alert
@@ -114,36 +207,32 @@ function onPageChange(page) {
     <div class="panel resultPanel">
       <div class="resultSummary">
         <div>
-          <p class="summaryLabel">检索结果</p>
-          <h2>{{ total }} 条匹配</h2>
+          <p class="summaryLabel">关键词搜索</p>
+          <h2>{{ hasSearched ? `${total} 条匹配` : '等待搜索' }}</h2>
         </div>
         <p class="summaryMeta">
           搜索语言：{{ languageLabelMap[selectedLanguage] || '未选择' }} · 结果语言：{{ activeResultLanguages.length }} 种
+          · 来源语言：{{ languageLabelMap[activeSourceLanguage] || activeSourceLanguage.toUpperCase() }}
         </p>
       </div>
 
-      <div v-if="total > 0" class="paginationWrap paginationWrapTop">
-        <el-pagination
-          class="paginationControl"
-          layout="prev, pager, next, jumper, ->, total"
-          :current-page="currentPage"
-          :page-size="PAGE_SIZE"
-          :total="total"
-          :pager-count="7"
-          @current-change="onPageChange"
-        />
-        <p class="pageMeta">
-          第 {{ currentPage }} / {{ totalPages }} 页
-        </p>
-      </div>
+      <SearchPager
+        v-if="total > 0"
+        class="paginationWrap"
+        :current-page="currentPage"
+        :total-pages="totalPages"
+        :total="total"
+        :disabled="loading"
+        @change="onSearch"
+      />
 
       <div v-if="loading" class="resultList">
         <el-skeleton v-for="idx in 4" :key="idx" animated>
           <template #template>
             <div class="skeletonItem">
-              <el-skeleton-item variant="text" style="width: 26%" />
-              <el-skeleton-item variant="h3" style="width: 92%; margin-top: 16px" />
-              <el-skeleton-item variant="text" style="width: 88%; margin-top: 8px" />
+              <el-skeleton-item variant="text" style="width: 28%" />
+              <el-skeleton-item variant="h3" style="width: 68%; margin-top: 18px" />
+              <el-skeleton-item variant="text" style="width: 94%; margin-top: 10px" />
             </div>
           </template>
         </el-skeleton>
@@ -165,24 +254,17 @@ function onPageChange(page) {
         />
       </div>
 
-      <div v-else class="emptyState">
-        输入关键词后开始搜索。
-      </div>
+      <el-empty v-else description="等待搜索" />
 
-      <div v-if="total > 0" class="paginationWrap">
-        <el-pagination
-          class="paginationControl"
-          layout="prev, pager, next, jumper, ->, total"
-          :current-page="currentPage"
-          :page-size="PAGE_SIZE"
-          :total="total"
-          :pager-count="7"
-          @current-change="onPageChange"
-        />
-        <p class="pageMeta">
-          第 {{ currentPage }} / {{ totalPages }} 页
-        </p>
-      </div>
+      <SearchPager
+        v-if="total > 0"
+        class="paginationWrap"
+        :current-page="currentPage"
+        :total-pages="totalPages"
+        :total="total"
+        :disabled="loading"
+        @change="onSearch"
+      />
     </div>
   </section>
 </template>
@@ -199,23 +281,31 @@ function onPageChange(page) {
   border-radius: 24px;
   background: rgba(9, 18, 34, 0.78);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18);
+}
+
+.stickyPanel {
+  position: sticky;
+  top: calc(0px - var(--content-pane-pad-top, 0px));
+  z-index: 3;
   backdrop-filter: blur(16px);
 }
 
-.inlineAlert {
-  margin-top: -4px;
+.filterGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1.4fr) minmax(0, 1.1fr) repeat(2, minmax(0, 160px)) auto;
+  gap: 12px;
 }
 
-.resultPanel {
-  min-height: 420px;
+.searchButton {
+  min-width: 120px;
 }
 
 .resultSummary {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
 .summaryLabel {
@@ -228,7 +318,6 @@ function onPageChange(page) {
 
 h2 {
   margin: 0;
-  font-size: 30px;
 }
 
 .summaryMeta {
@@ -236,91 +325,48 @@ h2 {
   color: rgba(223, 231, 246, 0.72);
 }
 
+.paginationWrap {
+  margin-top: 20px;
+}
+
 .resultList {
   display: grid;
   gap: 14px;
+  margin-top: 20px;
 }
 
 .skeletonItem {
-  padding: 18px 0;
+  padding: 18px 20px;
+  border-radius: 20px;
+  border: 1px solid rgba(113, 139, 191, 0.2);
+  background: rgba(10, 20, 37, 0.72);
 }
 
 .emptyState {
-  display: grid;
-  place-items: center;
-  min-height: 220px;
-  color: rgba(223, 231, 246, 0.52);
+  margin-top: 20px;
+  color: rgba(223, 231, 246, 0.72);
 }
 
-.paginationWrap {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.paginationWrapTop {
-  margin-bottom: 20px;
-}
-
-.paginationWrap:not(.paginationWrapTop) {
-  margin-top: 22px;
-}
-
-.pageMeta {
-  margin: 0;
-  color: rgba(223, 231, 246, 0.66);
-}
-
-.paginationControl:deep(.btn-prev),
-.paginationControl:deep(.btn-next),
-.paginationControl:deep(.el-pager li),
-.paginationControl:deep(.el-pagination__jump),
-.paginationControl:deep(.el-pagination__total) {
-  background: transparent;
-  color: rgba(232, 239, 252, 0.82);
-}
-
-.paginationControl:deep(.btn-prev),
-.paginationControl:deep(.btn-next),
-.paginationControl:deep(.el-pager li) {
-  min-width: 34px;
-  height: 34px;
-  border: 1px solid rgba(169, 127, 68, 0.24);
-  border-radius: 12px;
-  background: rgba(8, 16, 30, 0.82);
-}
-
-.paginationControl:deep(.el-pager li.is-active) {
-  color: #1f1306;
-  border-color: transparent;
-  background: linear-gradient(135deg, #f0d08e, #bf7f3a);
-}
-
-.paginationControl:deep(.btn-prev:disabled),
-.paginationControl:deep(.btn-next:disabled) {
-  opacity: 0.38;
-}
-
-.paginationControl:deep(.el-input__wrapper) {
-  background: rgba(8, 16, 30, 0.82);
-  box-shadow: 0 0 0 1px rgba(169, 127, 68, 0.24) inset;
+@media (max-width: 1180px) {
+  .filterGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
-  .panel {
-    padding: 18px;
-    border-radius: 20px;
+  .filterGrid {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
   }
 
-  .resultSummary {
-    flex-direction: column;
-    align-items: flex-start;
+  .filterGrid > * {
+    flex: 0 0 min(72vw, 240px);
   }
 
-  .paginationWrap {
-    align-items: flex-start;
+  .searchButton {
+    flex-basis: 120px;
   }
 }
 </style>

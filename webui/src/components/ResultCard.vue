@@ -5,8 +5,37 @@
         <span class="hashLabel">TextMap Hash</span>
         <code>{{ result.hash }}</code>
       </div>
-      <span class="langCount">{{ visibleTranslations.length }} 种语言</span>
+      <div class="headerMeta">
+        <span class="langCount">{{ visibleTranslations.length }} 种语言</span>
+        <span v-if="result.sourceCount" class="sourceCount">{{ result.sourceCount }} 个来源</span>
+      </div>
     </div>
+
+    <div class="sourcePanel">
+      <div class="sourceText">
+        <span class="sourceType">{{ sourceLabel }}</span>
+        <StylizedText :text="primarySource.title || '未归类文本'" class="sourceTitle" />
+        <StylizedText v-if="primarySource.subtitle" :text="primarySource.subtitle" class="sourceSubtitle" />
+      </div>
+      <div class="sourceActions">
+        <el-button
+          v-if="primarySource.detailQuery"
+          size="small"
+          @click="openDetail(primarySource.detailQuery)"
+        >
+          来源详情
+        </el-button>
+        <el-button size="small" plain @click="openTextDetail">
+          全部来源
+        </el-button>
+      </div>
+    </div>
+
+    <VersionBadges
+      class="versionRow"
+      :created-version="result.createdVersion"
+      :updated-version="result.updatedVersion"
+    />
 
     <div
       v-for="item in visibleTranslations"
@@ -32,10 +61,13 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
 
 import StylizedText from '@/components/StylizedText.vue'
+import VersionBadges from '@/components/VersionBadges.vue'
+import { buildDetailLocation } from '@/utils/detailRoute'
 import { toCopyableText } from '@/utils/textContent'
 
 const props = defineProps({
@@ -56,6 +88,8 @@ const props = defineProps({
     default: () => ({})
   }
 })
+
+const router = useRouter()
 
 const visibleTranslations = computed(() => {
   const translates = props.result.translates || {}
@@ -88,6 +122,33 @@ const visibleTranslations = computed(() => {
 
   return ordered
 })
+
+const primarySource = computed(() => props.result.primarySource || {})
+
+const sourceLabel = computed(() => {
+  const mapping = {
+    mission: '任务',
+    message: '短信',
+    book: '书籍',
+    voice: '角色语音',
+    story: '角色故事',
+    unknown: '未归类'
+  }
+  return mapping[primarySource.value.sourceType] || '文本来源'
+})
+
+function openDetail(detailQuery) {
+  router.push(buildDetailLocation(detailQuery))
+}
+
+function openTextDetail() {
+  router.push(
+    buildDetailLocation({
+      kind: 'text',
+      hash: props.result.hash
+    })
+  )
+}
 
 async function copyTranslation(text) {
   const copyableText = toCopyableText(text)
@@ -126,17 +187,34 @@ async function copyTranslation(text) {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
-.resultCardHeader {
+.resultCardHeader,
+.translationHeader,
+.sourcePanel,
+.versionRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.resultCardHeader {
   margin-bottom: 14px;
 }
 
-.langCount {
+.headerMeta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.langCount,
+.sourceCount {
+  padding: 4px 10px;
+  border-radius: 999px;
   font-size: 12px;
-  color: rgba(233, 239, 250, 0.62);
+  color: rgba(233, 239, 250, 0.72);
+  background: rgba(122, 183, 255, 0.12);
 }
 
 .hashLabel {
@@ -152,19 +230,63 @@ code {
   font-size: 13px;
 }
 
+.sourcePanel {
+  align-items: flex-start;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(11, 21, 39, 0.7);
+  border: 1px solid rgba(122, 183, 255, 0.14);
+}
+
+.sourceText {
+  min-width: 0;
+}
+
+.sourceType {
+  display: inline-flex;
+  margin-bottom: 10px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(240, 208, 142, 0.12);
+  color: #f5d398;
+  font-size: 12px;
+}
+
+.sourceTitle {
+  color: inherit;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.sourceTitle:deep(p),
+.sourceSubtitle:deep(p) {
+  margin: 0;
+}
+
+.sourceSubtitle {
+  color: rgba(223, 231, 246, 0.68);
+  margin-top: 8px;
+}
+
+.sourceActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.versionRow {
+  margin-top: 12px;
+  justify-content: flex-start;
+}
+
 .translationBlock + .translationBlock {
   margin-top: 18px;
   padding-top: 18px;
   border-top: 1px solid rgba(126, 153, 201, 0.16);
 }
 
-.translationHeader {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
+.translationBlock:first-of-type {
+  margin-top: 18px;
 }
 
 .languageLabel {

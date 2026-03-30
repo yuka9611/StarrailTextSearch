@@ -11,6 +11,7 @@ import {
 } from '@/stores/appState'
 
 const selectedLanguage = ref('chs')
+const selectedSourceLanguage = ref('chs')
 const selectedResultLanguages = ref([])
 const playerName = ref('开拓者')
 const playerGender = ref('both')
@@ -30,6 +31,7 @@ onMounted(async () => {
     await ensureMetaLoaded()
     const preferences = getSearchPreferences()
     selectedLanguage.value = preferences.defaultLanguage
+    selectedSourceLanguage.value = preferences.sourceLanguage
     selectedResultLanguages.value = preferences.resultLanguages
     playerName.value = preferences.playerName
     playerGender.value = preferences.playerGender
@@ -41,11 +43,13 @@ onMounted(async () => {
 function onSave() {
   const snapshot = saveSearchPreferences({
     defaultLanguage: selectedLanguage.value,
+    sourceLanguage: selectedSourceLanguage.value,
     resultLanguages: selectedResultLanguages.value,
     playerName: playerName.value,
     playerGender: playerGender.value
   })
   selectedLanguage.value = snapshot.defaultLanguage
+  selectedSourceLanguage.value = snapshot.sourceLanguage
   selectedResultLanguages.value = snapshot.resultLanguages
   playerName.value = snapshot.playerName
   playerGender.value = snapshot.playerGender
@@ -58,24 +62,44 @@ function onSave() {
     <div class="settingsCard">
       <p class="eyebrow">Search Preferences</p>
       <h2>搜索设置</h2>
+      <p class="pageLead">
+        默认结果语言、来源语言和玩家替换会同步用于关键词搜索、详情页以及短信阅读页。
+      </p>
 
       <el-skeleton v-if="loading" :rows="8" animated />
 
       <el-form v-else label-position="top" class="settingsForm">
-        <el-form-item label="默认搜索语言">
-          <el-select
-            v-model="selectedLanguage"
-            class="languageSelect"
-            placeholder="请选择默认语言"
-          >
-            <el-option
-              v-for="item in appState.languages"
-              :key="item.code"
-              :label="item.label"
-              :value="item.code"
-            />
-          </el-select>
-        </el-form-item>
+        <div class="twoColumn">
+          <el-form-item label="默认搜索语言">
+            <el-select
+              v-model="selectedLanguage"
+              class="languageSelect"
+              placeholder="请选择默认语言"
+            >
+              <el-option
+                v-for="item in appState.languages"
+                :key="item.code"
+                :label="item.label"
+                :value="item.code"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="来源标题语言">
+            <el-select
+              v-model="selectedSourceLanguage"
+              class="languageSelect"
+              placeholder="请选择来源语言"
+            >
+              <el-option
+                v-for="item in appState.languages"
+                :key="`source-${item.code}`"
+                :label="item.label"
+                :value="item.code"
+              />
+            </el-select>
+          </el-form-item>
+        </div>
 
         <el-form-item label="结果语言">
           <el-transfer
@@ -87,27 +111,38 @@ function onSave() {
           />
         </el-form-item>
 
-        <el-form-item label="玩家昵称">
-          <el-input
-            v-model="playerName"
-            class="textInput"
-            maxlength="24"
-            placeholder="用于替换 {NICKNAME}"
-            clearable
-          />
-        </el-form-item>
+        <div class="twoColumn">
+          <el-form-item label="玩家昵称">
+            <el-input
+              v-model="playerName"
+              class="textInput"
+              maxlength="24"
+              placeholder="用于替换 {NICKNAME}"
+              clearable
+            />
+          </el-form-item>
 
-        <el-form-item label="玩家性别">
-          <el-radio-group v-model="playerGender" class="genderGroup">
-            <el-radio-button
-              v-for="item in playerGenderOptions"
-              :key="item.value"
-              :label="item.value"
-            >
-              {{ item.label }}
-            </el-radio-button>
-          </el-radio-group>
-        </el-form-item>
+          <el-form-item label="玩家性别">
+            <el-radio-group v-model="playerGender" class="genderGroup">
+              <el-radio-button
+                v-for="item in playerGenderOptions"
+                :key="item.value"
+                :label="item.value"
+              >
+                {{ item.label }}
+              </el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </div>
+
+        <div class="infoRow">
+          <span v-if="appState.currentVersion" class="versionChip">
+            当前数据库版本：{{ appState.currentVersion }}
+          </span>
+          <span v-if="appState.dbPath" class="pathChip">
+            {{ appState.dbPath }}
+          </span>
+        </div>
 
         <el-button
           class="saveButton"
@@ -145,21 +180,30 @@ function onSave() {
 }
 
 h2 {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: 28px;
+}
+
+.pageLead {
+  margin: 10px 0 0;
+  color: rgba(223, 231, 246, 0.72);
 }
 
 .settingsForm {
   display: grid;
-  gap: 8px;
+  gap: 12px;
+  margin-top: 18px;
 }
 
-.languageSelect {
-  width: min(360px, 100%);
+.twoColumn {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
+.languageSelect,
 .textInput {
-  width: min(420px, 100%);
+  width: 100%;
 }
 
 .resultLanguageTransfer {
@@ -182,6 +226,11 @@ h2 {
   color: rgba(233, 239, 250, 0.82);
 }
 
+.genderGroup {
+  display: flex;
+  flex-wrap: wrap;
+}
+
 .genderGroup:deep(.el-radio-button__inner) {
   min-width: 88px;
   background: rgba(8, 16, 30, 0.82);
@@ -196,32 +245,30 @@ h2 {
   box-shadow: none;
 }
 
+.infoRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.versionChip,
+.pathChip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(233, 239, 250, 0.75);
+}
+
 .saveButton {
   width: fit-content;
   min-width: 132px;
-  border: 0;
-  color: #1f1306;
-  background: linear-gradient(135deg, #f0d08e, #bf7f3a);
-  box-shadow: 0 12px 28px rgba(168, 112, 45, 0.28);
 }
 
-.saveButton:hover,
-.saveButton:focus-visible {
-  color: #1f1306;
-  background: linear-gradient(135deg, #f4daa1, #c78944);
-  box-shadow: 0 14px 30px rgba(168, 112, 45, 0.34);
-}
-
-.saveButton:deep(span) {
-  font-weight: 600;
-}
-
-.saveButton.is-disabled,
-.saveButton.is-disabled:hover,
-.saveButton.is-disabled:focus-visible {
-  color: rgba(255, 244, 225, 0.56);
-  background: linear-gradient(135deg, rgba(125, 99, 63, 0.5), rgba(93, 67, 40, 0.5));
-  box-shadow: none;
+@media (max-width: 900px) {
+  .twoColumn {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 720px) {

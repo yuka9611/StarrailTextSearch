@@ -65,3 +65,23 @@ textarea {
 .el-transfer {
   gap: 14px;
 }
+
+/* Keep select text readable when Element Plus switches option surfaces to a light tone. */
+.el-select-dropdown__item.is-hovering,
+.el-select-dropdown__item:hover {
+  color: #1f1306;
+  background: rgba(245, 230, 205, 0.96);
+}
+
+.el-select-dropdown__item.is-selected {
+  color: #1f1306;
+  background: rgba(249, 241, 229, 0.96);
+}
+
+.el-select-dropdown.is-multiple .el-select-dropdown__item.is-selected:after {
+  background-color: #1f1306;
+}
+
+.el-select__selection .el-tag {
+  --el-tag-text-color: #1f1306;
+}

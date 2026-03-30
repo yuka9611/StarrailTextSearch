@@ -1,21 +1,95 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
-import { appState, ensureMetaLoaded } from '@/stores/appState'
+import { appState, ensureMetaLoaded, getViewState, saveViewState } from '@/stores/appState'
 
 const route = useRoute()
+const contentPane = ref(null)
+const isCompactScreen = ref(false)
 
-const activePath = computed(() => route.path)
+const keepAliveViews = new Set(['search', 'mission-book', 'message', 'voice', 'story', 'settings'])
+
+const activePath = computed(() => {
+  if (route.path !== '/detail') {
+    return route.path
+  }
+
+  const kind = String(route.query.kind || '').toLowerCase()
+  if (kind === 'mission' || kind === 'book') {
+    return '/mission-book'
+  }
+  if (kind === 'message') {
+    return '/message'
+  }
+  if (kind === 'voice') {
+    return '/voice'
+  }
+  if (kind === 'story') {
+    return '/story'
+  }
+  return '/'
+})
+
 const pageTitle = computed(() => route.meta.title || '星铁文本搜索')
+const versionLabel = computed(() => appState.currentVersion || '当前版本未识别')
+const menuMode = computed(() => (isCompactScreen.value ? 'horizontal' : 'vertical'))
+
+function updateScreenMode() {
+  if (typeof window === 'undefined') {
+    return
+  }
+  isCompactScreen.value = window.innerWidth <= 860
+}
+
+function saveScrollPosition(routeKey) {
+  if (!contentPane.value || !routeKey) {
+    return
+  }
+  saveViewState(`scroll:${routeKey}`, {
+    scrollTop: contentPane.value.scrollTop
+  })
+}
+
+async function restoreScrollPosition(routeKey) {
+  await nextTick()
+  if (!contentPane.value) {
+    return
+  }
+  const snapshot = getViewState(`scroll:${routeKey}`, {
+    scrollTop: 0
+  })
+  contentPane.value.scrollTo({
+    left: 0,
+    top: Number(snapshot.scrollTop || 0),
+    behavior: 'auto'
+  })
+}
 
 onMounted(async () => {
+  updateScreenMode()
+  window.addEventListener('resize', updateScreenMode)
   try {
     await ensureMetaLoaded()
   } catch (error) {
-    // 页面上会直接展示错误提示，这里不额外处理。
+    // 页面本身会展示错误提示，这里不额外处理。
   }
+  await restoreScrollPosition(route.fullPath)
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateScreenMode)
+})
+
+watch(
+  () => route.fullPath,
+  async (to, from) => {
+    if (from) {
+      saveScrollPosition(from)
+    }
+    await restoreScrollPosition(to)
+  }
+)
 </script>
 
 <template>
@@ -29,13 +103,31 @@ onMounted(async () => {
         </div>
       </div>
 
+      <div class="versionPanel">
+        <span class="versionLabel">数据版本</span>
+        <strong>{{ versionLabel }}</strong>
+      </div>
+
       <el-menu
         class="navMenu"
         :default-active="activePath"
         :router="true"
+        :mode="menuMode"
       >
         <el-menu-item index="/">
           关键词搜索
+        </el-menu-item>
+        <el-menu-item index="/mission-book">
+          任务 / 书籍搜索
+        </el-menu-item>
+        <el-menu-item index="/message">
+          短信搜索
+        </el-menu-item>
+        <el-menu-item index="/voice">
+          角色语音搜索
+        </el-menu-item>
+        <el-menu-item index="/story">
+          角色故事搜索
         </el-menu-item>
         <el-menu-item index="/settings">
           设置
@@ -43,17 +135,25 @@ onMounted(async () => {
       </el-menu>
     </aside>
 
-    <main class="contentPane">
+    <main ref="contentPane" class="contentPane">
       <header class="contentHeader">
         <div>
           <p class="eyebrow">Astral Archive</p>
           <h1>{{ pageTitle }}</h1>
         </div>
-        <div
-          class="statusBadge"
-          :class="appState.dataAvailable ? 'statusOk' : 'statusWarn'"
-        >
-          {{ appState.dataAvailable ? '数据目录已连接' : '数据目录不可用' }}
+        <div class="statusGroup">
+          <div
+            class="statusBadge"
+            :class="appState.dataAvailable ? 'statusOk' : 'statusWarn'"
+          >
+            {{ appState.dataAvailable ? '数据目录已连接' : '数据目录不可用' }}
+          </div>
+          <div
+            class="statusBadge"
+            :class="appState.databaseAvailable ? 'statusOk' : 'statusWarn'"
+          >
+            {{ appState.databaseAvailable ? '数据库已就绪' : '数据库待初始化' }}
+          </div>
         </div>
       </header>
 
@@ -73,7 +173,20 @@ onMounted(async () => {
         :title="`未找到数据目录：${appState.dataDir}`"
       />
 
-      <router-view />
+      <router-view v-slot="{ Component, route: currentRoute }">
+        <keep-alive>
+          <component
+            :is="Component"
+            v-if="currentRoute.meta.keepAlive && keepAliveViews.has(String(currentRoute.name || ''))"
+            :key="currentRoute.name"
+          />
+        </keep-alive>
+        <component
+          :is="Component"
+          v-if="!currentRoute.meta.keepAlive || !keepAliveViews.has(String(currentRoute.name || ''))"
+          :key="currentRoute.fullPath"
+        />
+      </router-view>
     </main>
   </div>
 </template>
@@ -82,7 +195,7 @@ onMounted(async () => {
 .shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 292px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -90,7 +203,7 @@ onMounted(async () => {
   padding: 26px 20px;
   border-right: 1px solid rgba(212, 180, 109, 0.15);
   background:
-    linear-gradient(180deg, rgba(8, 15, 30, 0.92), rgba(7, 13, 24, 0.96)),
+    linear-gradient(180deg, rgba(8, 15, 30, 0.94), rgba(7, 13, 24, 0.98)),
     radial-gradient(circle at top, rgba(122, 183, 255, 0.14), transparent 42%);
 }
 
@@ -107,7 +220,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 10px 8px 26px;
+  padding: 10px 8px 22px;
 }
 
 .brandIcon {
@@ -130,6 +243,28 @@ onMounted(async () => {
   color: rgba(201, 214, 236, 0.65);
 }
 
+.versionPanel {
+  margin: 0 8px 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(122, 183, 255, 0.18);
+  border-radius: 18px;
+  background: rgba(12, 22, 41, 0.7);
+  display: grid;
+  gap: 8px;
+}
+
+.versionLabel {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(201, 214, 236, 0.58);
+}
+
+.versionPanel strong {
+  color: #f6d69d;
+  line-height: 1.4;
+}
+
 .navMenu {
   border-right: none;
   background: transparent;
@@ -147,7 +282,10 @@ onMounted(async () => {
 }
 
 .contentPane {
-  padding: 32px;
+  --content-pane-pad-top: 32px;
+  padding: var(--content-pane-pad-top) 32px 32px;
+  overflow-y: auto;
+  max-height: 100vh;
 }
 
 .contentHeader {
@@ -156,6 +294,13 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 22px;
+}
+
+.statusGroup {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .eyebrow {
@@ -180,33 +325,61 @@ h1 {
 }
 
 .statusOk {
-  color: #dff6de;
-  background: rgba(92, 173, 116, 0.16);
-  border: 1px solid rgba(92, 173, 116, 0.28);
+  background: rgba(124, 197, 142, 0.16);
+  color: #9be3ad;
 }
 
 .statusWarn {
-  color: #ffe7b1;
-  background: rgba(212, 180, 109, 0.14);
-  border: 1px solid rgba(212, 180, 109, 0.24);
+  background: rgba(229, 188, 115, 0.16);
+  color: #f3ce8d;
 }
 
 .pageAlert {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .sidebar {
+    padding: 18px 16px 10px;
     border-right: none;
     border-bottom: 1px solid rgba(212, 180, 109, 0.15);
   }
 
+  .sidebar::after {
+    inset: 10px;
+  }
+
+  .brandPanel {
+    padding: 6px 4px 14px;
+  }
+
+  .versionPanel {
+    margin: 0 4px 12px;
+  }
+
+  .navMenu {
+    overflow-x: auto;
+  }
+
+  .navMenu :deep(.el-menu--horizontal) {
+    display: flex;
+    gap: 8px;
+    border-bottom: none;
+  }
+
+  .navMenu :deep(.el-menu-item) {
+    margin-bottom: 0;
+    min-width: max-content;
+  }
+
   .contentPane {
-    padding: 24px 18px 32px;
+    --content-pane-pad-top: 22px;
+    padding: var(--content-pane-pad-top) 16px 28px;
   }
 
   .contentHeader {

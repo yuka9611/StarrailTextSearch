@@ -56,20 +56,210 @@ class StarrailRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_api_request(self, parsed_url) -> None:
         try:
+            params = parse_qs(parsed_url.query)
+            source_lang = _get_first_param(params, "sourceLang", DEFAULT_LANGUAGE)
+            result_langs = _get_list_param(params, "resultLangs")
+            player_name = _get_first_param(params, "playerName", DEFAULT_PLAYER_NAME)
+            player_gender = _get_first_param(params, "playerGender", DEFAULT_PLAYER_GENDER)
+
             if parsed_url.path == "/api/meta":
-                self._write_json(HTTPStatus.OK, self.service.get_meta())
+                self._write_json(HTTPStatus.OK, self.service.get_meta(source_lang=source_lang))
+                return
+
+            if parsed_url.path == "/api/version":
+                self._write_json(HTTPStatus.OK, self.service.get_versions())
                 return
 
             if parsed_url.path == "/api/search":
-                params = parse_qs(parsed_url.query)
                 payload = self.service.search(
                     keyword=_get_first_param(params, "keyword", ""),
                     lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
                     page=_parse_int_param(params, "page", 1),
                     size=_parse_int_param(params, "size", DEFAULT_PAGE_SIZE),
-                    result_langs=_get_list_param(params, "resultLangs"),
-                    player_name=_get_first_param(params, "playerName", DEFAULT_PLAYER_NAME),
-                    player_gender=_get_first_param(params, "playerGender", DEFAULT_PLAYER_GENDER),
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    source_types=_get_list_param(params, "sourceTypes"),
+                    source_lang=source_lang,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/text/sources":
+                payload = self.service.get_text_sources(
+                    text_hash=_get_first_param(params, "hash", _get_first_param(params, "textHash", "")),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/mission/search":
+                payload = self.service.search_missions(
+                    keyword=_get_first_param(params, "keyword", ""),
+                    lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
+                    source_lang=source_lang,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    page=_parse_int_param(params, "page", 1),
+                    size=_parse_int_param(params, "size", DEFAULT_PAGE_SIZE),
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/mission/detail":
+                payload = self.service.get_mission_detail(
+                    mission_id=_parse_required_int_param(params, "missionId"),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/book/search":
+                payload = self.service.search_books(
+                    keyword=_get_first_param(params, "keyword", ""),
+                    lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
+                    source_lang=source_lang,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    page=_parse_int_param(params, "page", 1),
+                    size=_parse_int_param(params, "size", DEFAULT_PAGE_SIZE),
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/book/detail":
+                payload = self.service.get_book_detail(
+                    book_id=_parse_required_int_param(params, "bookId"),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/message/search":
+                payload = self.service.search_messages(
+                    keyword=_get_first_param(params, "keyword", ""),
+                    lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
+                    source_lang=source_lang,
+                    camp=_get_optional_param(params, "camp"),
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    page=_parse_int_param(params, "page", 1),
+                    size=_parse_int_param(params, "size", 60),
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/message/detail":
+                payload = self.service.get_message_detail(
+                    thread_id=_parse_required_int_param(params, "threadId"),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/avatar/search":
+                payload = self.service.search_avatars(
+                    kind=_get_required_param(params, "kind"),
+                    avatar_keyword=_get_first_param(params, "avatarKeyword", ""),
+                    keyword=_get_first_param(params, "keyword", ""),
+                    lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
+                    source_lang=source_lang,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/voice/search":
+                payload = self.service.search_voices(
+                    keyword=_get_first_param(params, "keyword", ""),
+                    lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
+                    source_lang=source_lang,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    player_gender=player_gender,
+                    page=_parse_int_param(params, "page", 1),
+                    size=_parse_int_param(params, "size", DEFAULT_PAGE_SIZE),
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/voice/by-avatar":
+                payload = self.service.get_avatar_entries(
+                    kind="voice",
+                    avatar_id=_parse_required_int_param(params, "avatarId"),
+                    keyword=_get_first_param(params, "keyword", ""),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/voice/detail":
+                payload = self.service.get_voice_detail(
+                    entry_key=_get_required_param(params, "entryKey"),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/story/search":
+                payload = self.service.search_stories(
+                    keyword=_get_first_param(params, "keyword", ""),
+                    lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
+                    source_lang=source_lang,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    page=_parse_int_param(params, "page", 1),
+                    size=_parse_int_param(params, "size", DEFAULT_PAGE_SIZE),
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/story/by-avatar":
+                payload = self.service.get_avatar_entries(
+                    kind="story",
+                    avatar_id=_parse_required_int_param(params, "avatarId"),
+                    keyword=_get_first_param(params, "keyword", ""),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/story/detail":
+                payload = self.service.get_story_detail(
+                    entry_key=_get_required_param(params, "entryKey"),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
                 )
                 self._write_json(HTTPStatus.OK, payload)
                 return
@@ -139,6 +329,18 @@ def _get_first_param(params: dict, key: str, default: str) -> str:
     return params.get(key, [default])[0]
 
 
+def _get_optional_param(params: dict, key: str) -> str | None:
+    value = _get_first_param(params, key, "").strip()
+    return value or None
+
+
+def _get_required_param(params: dict, key: str) -> str:
+    value = _get_first_param(params, key, "").strip()
+    if not value:
+        raise ValueError(f"缺少必填参数：{key}")
+    return value
+
+
 def _get_list_param(params: dict, key: str) -> list[str]:
     normalized_values: list[str] = []
     for raw_value in params.get(key, []):
@@ -155,6 +357,10 @@ def _parse_int_param(params: dict, key: str, default: int) -> int:
         return int(raw_value)
     except (TypeError, ValueError) as error:
         raise ValueError(f"参数 {key} 必须是整数。") from error
+
+
+def _parse_required_int_param(params: dict, key: str) -> int:
+    return _parse_int_param(params, key, int(_get_required_param(params, key)))
 
 
 def maybe_open_browser(url: str) -> None:
