@@ -93,8 +93,6 @@ CREATE TABLE IF NOT EXISTS text_map (
     UNIQUE(scope, lang, hash)
 );
 
-CREATE INDEX IF NOT EXISTS text_map_lang_hash_index ON text_map(lang, hash);
-CREATE INDEX IF NOT EXISTS text_map_scope_lang_hash_index ON text_map(scope, lang, hash);
 CREATE INDEX IF NOT EXISTS text_map_created_version_index ON text_map(created_version_id);
 CREATE INDEX IF NOT EXISTS text_map_updated_version_index ON text_map(updated_version_id);
 
@@ -284,12 +282,8 @@ CREATE INDEX IF NOT EXISTS entity_search_updated_index ON entity_search(updated_
 
 CREATE VIRTUAL TABLE IF NOT EXISTS entity_search_fts USING fts5(
     search_text,
-    entity_type UNINDEXED,
-    entity_key UNINDEXED,
-    lang UNINDEXED,
-    camp UNINDEXED,
-    thread_type UNINDEXED,
-    tokenize = 'unicode61'
+    tokenize = 'unicode61',
+    content = ''
 );
 """
 
@@ -511,6 +505,17 @@ def current_version_from_git() -> str:
     return (result.stdout or "").strip() or "current"
 
 
+def _vacuum_database(db_path: Path, *, verbose: bool = True) -> None:
+    if verbose:
+        print(f"Vacuuming {db_path}...")
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA busy_timeout = 10000")
+        connection.execute("VACUUM")
+    finally:
+        connection.close()
+
+
 def resolve_gender_pair(male_text: str, female_text: str, player_gender: str) -> str:
     if player_gender == "male":
         return male_text
@@ -616,6 +621,8 @@ class StarrailDatabaseBuilder:
             from dbBuild.history_backfill import run_backfill
 
             run_backfill(DB_TMP_PATH, verbose=verbose)
+        else:
+            _vacuum_database(DB_TMP_PATH, verbose=verbose)
 
         os.replace(DB_TMP_PATH, self.db_path)
         return self.db_path
@@ -1258,12 +1265,12 @@ class StarrailDatabaseBuilder:
             )
 
     def _rebuild_text_map_fts(self, connection: sqlite3.Connection) -> None:
-        connection.execute("DELETE FROM text_map_fts")
+        self._recreate_text_map_fts(connection)
         cursor = connection.execute(
             "SELECT id, scope, lang, content FROM text_map WHERE scope='normal' ORDER BY id"
         )
         rows: list[tuple[int, str, str]] = []
-        for row in cursor.fetchall():
+        for row in cursor:
             rows.append((
                 int(row["id"]),
                 normalize_text_for_search(self._normalize_text_for_index(row["content"])),
@@ -1281,9 +1288,22 @@ class StarrailDatabaseBuilder:
                 rows,
             )
 
+    def _recreate_text_map_fts(self, connection: sqlite3.Connection) -> None:
+        connection.execute("DROP TABLE IF EXISTS text_map_fts")
+        connection.execute(
+            """
+            CREATE VIRTUAL TABLE text_map_fts USING fts5(
+                search_content,
+                lang_scope,
+                tokenize = 'unicode61',
+                content = ''
+            )
+            """
+        )
+
     def _rebuild_entity_search(self, connection: sqlite3.Connection, version_id: int) -> None:
         connection.execute("DELETE FROM entity_search")
-        connection.execute("DELETE FROM entity_search_fts")
+        self._recreate_entity_search_fts(connection)
 
         resolver = TextMapCache(connection)
         cursor = connection.cursor()
@@ -1306,13 +1326,25 @@ class StarrailDatabaseBuilder:
             )
             connection.execute(
                 """
-                INSERT INTO entity_search_fts(rowid, search_text, entity_type, entity_key, lang, camp, thread_type)
-                SELECT id, search_text, entity_type, entity_key, lang, camp, thread_type
+                INSERT INTO entity_search_fts(rowid, search_text)
+                SELECT id, search_text
                 FROM entity_search
                 """
             )
         finally:
             cursor.close()
+
+    def _recreate_entity_search_fts(self, connection: sqlite3.Connection) -> None:
+        connection.execute("DROP TABLE IF EXISTS entity_search_fts")
+        connection.execute(
+            """
+            CREATE VIRTUAL TABLE entity_search_fts USING fts5(
+                search_text,
+                tokenize = 'unicode61',
+                content = ''
+            )
+            """
+        )
 
     def _build_mission_search_rows(
         self,

@@ -18,6 +18,7 @@ if str(SERVER_ROOT) not in sys.path:
 from data_paths import DATA_ROOT, DB_PATH
 from dbBuild.builder import (
     StarrailDatabaseBuilder,
+    _vacuum_database,
     extract_talk_sentence_refs,
     hash_text,
     normalize_hash,
@@ -938,6 +939,7 @@ def update_text_map_versions(
 def rebuild_dependent_indexes(connection: sqlite3.Connection, current_version_id: int) -> None:
     builder = StarrailDatabaseBuilder(DB_PATH)
     builder._rebuild_sources(connection, current_version_id)
+    builder._rebuild_text_map_fts(connection)
     builder._rebuild_entity_search(connection, current_version_id)
 
 
@@ -1210,6 +1212,7 @@ def run_backfill(db_path: Path = DB_PATH, *, verbose: bool = True) -> None:
         if entity_repo_path is not None:
             shutil.rmtree(entity_repo_path.parent, ignore_errors=True)
 
+    _vacuum_database(db_path, verbose=verbose)
     _log(verbose, f"History backfill complete. Current version: {current_version_tag}")
 
 
