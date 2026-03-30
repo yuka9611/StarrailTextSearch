@@ -66,7 +66,11 @@ const visibleMessageSections = computed(() => {
   const activeSection = messageSections.value.find(
     (section) => Number(section.sectionId) === Number(activeSectionId.value)
   )
-  return activeSection ? [activeSection] : messageSections.value.slice(0, 1)
+  const sections = activeSection ? [activeSection] : messageSections.value.slice(0, 1)
+  return sections.map((section) => ({
+    ...section,
+    displayEntries: expandMessageNodes(section.sectionId, section.nodes)
+  }))
 })
 
 watch(
@@ -165,10 +169,11 @@ function openSourceDetail(source) {
   router.push(buildDetailLocation(source.detailQuery))
 }
 
-function shouldShowSender(node, index, nodes) {
+function shouldShowSender(entry, index, entries) {
   if (detail.value?.kind !== 'message') {
     return false
   }
+  const node = entry?.node
   if (node.type === 'option_group' || node.sender === 'player') {
     return false
   }
@@ -178,7 +183,7 @@ function shouldShowSender(node, index, nodes) {
   if (index === 0) {
     return true
   }
-  const previous = nodes[index - 1]
+  const previous = entries[index - 1]?.node
   return previous?.sender !== node.sender
 }
 
@@ -192,19 +197,22 @@ function resolveSenderLabel(node) {
   return '对方'
 }
 
-function buildOptionSelectionKey(sectionId, nodeIndex) {
-  return `${sectionId}:${nodeIndex}`
+function buildOptionSelectionKeyForNode(sectionId, node, fallbackKey) {
+  if (node?.groupId != null) {
+    return `${sectionId}:${node.groupId}`
+  }
+  return `${sectionId}:${fallbackKey}`
 }
 
-function selectOption(sectionId, nodeIndex, option) {
+function selectOption(sectionId, node, fallbackKey, option) {
   selectedOptionKeys.value = {
     ...selectedOptionKeys.value,
-    [buildOptionSelectionKey(sectionId, nodeIndex)]: option.itemId
+    [buildOptionSelectionKeyForNode(sectionId, node, fallbackKey)]: option.itemId
   }
 }
 
-function resolveSelectedOption(sectionId, nodeIndex, node) {
-  const optionId = selectedOptionKeys.value[buildOptionSelectionKey(sectionId, nodeIndex)]
+function resolveSelectedOption(sectionId, node, fallbackKey) {
+  const optionId = selectedOptionKeys.value[buildOptionSelectionKeyForNode(sectionId, node, fallbackKey)]
   return node.options.find((option) => Number(option.itemId) === Number(optionId)) || node.options[0] || null
 }
 
@@ -217,6 +225,41 @@ function resolveOptionBubbleTranslations(option) {
     return option.content
   }
   return option?.label || {}
+}
+
+function resolveSelectedBranchNodes(sectionId, node, fallbackKey) {
+  const selected = resolveSelectedOption(sectionId, node, fallbackKey)
+  const branches = node?.optionBranches || []
+  const selectedBranch = branches.find(
+    (branch) => Number(branch?.optionItemId) === Number(selected?.itemId)
+  )
+  return selectedBranch?.nodes || []
+}
+
+function expandMessageNodes(sectionId, nodes) {
+  const expanded = []
+  for (let index = 0; index < (nodes || []).length; index += 1) {
+    const node = nodes[index]
+    const fallbackKey = index
+    expanded.push({
+      node,
+      key: `${sectionId}-${index}`,
+      fallbackKey
+    })
+    if (node?.type === 'option_group') {
+      const branchNodes = resolveSelectedBranchNodes(sectionId, node, fallbackKey)
+      for (let branchIndex = 0; branchIndex < branchNodes.length; branchIndex += 1) {
+        const branchNode = branchNodes[branchIndex]
+        const branchItemId = branchNode?.itemId ?? branchIndex
+        expanded.push({
+          node: branchNode,
+          key: `${sectionId}-${index}-branch-${branchItemId}-${branchIndex}`,
+          fallbackKey: `${index}-branch-${branchIndex}`
+        })
+      }
+    }
+  }
+  return expanded
 }
 </script>
 
@@ -330,18 +373,23 @@ function resolveOptionBubbleTranslations(option) {
           </div>
 
           <div class="messageTimeline">
-            <template v-for="(node, index) in section.nodes" :key="`${section.sectionId}-${index}`">
-              <div v-if="node.type === 'option_group'" class="optionGroup">
+            <template
+              v-for="(entry, index) in section.displayEntries"
+              :key="entry.key"
+            >
+              <div v-if="entry.node.type === 'option_group'" class="optionGroup">
                 <div class="optionSelector">
                   <button
-                    v-for="option in node.options"
+                    v-for="option in entry.node.options"
                     :key="option.itemId"
                     type="button"
                     class="optionButton"
                     :class="{
-                      active: resolveSelectedOption(section.sectionId, index, node)?.itemId === option.itemId
+                      active:
+                        resolveSelectedOption(section.sectionId, entry.node, entry.fallbackKey)?.itemId ===
+                        option.itemId
                     }"
-                    @click="selectOption(section.sectionId, index, option)"
+                    @click="selectOption(section.sectionId, entry.node, entry.fallbackKey, option)"
                   >
                     <DetailTranslations
                       :translations="option.label"
@@ -352,13 +400,17 @@ function resolveOptionBubbleTranslations(option) {
                 </div>
 
                 <div
-                  v-if="resolveSelectedOption(section.sectionId, index, node)"
+                  v-if="resolveSelectedOption(section.sectionId, entry.node, entry.fallbackKey)"
                   class="messageRow fromPlayer"
                 >
                   <span class="senderLabel">开拓者</span>
                   <div class="bubble playerBubble">
                     <DetailTranslations
-                      :translations="resolveOptionBubbleTranslations(resolveSelectedOption(section.sectionId, index, node))"
+                      :translations="
+                        resolveOptionBubbleTranslations(
+                          resolveSelectedOption(section.sectionId, entry.node, entry.fallbackKey)
+                        )
+                      "
                       :language-labels="languageLabelMap"
                       compact
                     />
@@ -369,17 +421,23 @@ function resolveOptionBubbleTranslations(option) {
               <div
                 v-else
                 class="messageRow"
-                :class="node.sender === 'player' ? 'fromPlayer' : 'fromNpc'"
+                :class="entry.node.sender === 'player' ? 'fromPlayer' : 'fromNpc'"
               >
-                <span v-if="shouldShowSender(node, index, section.nodes)" class="senderLabel">
-                  {{ resolveSenderLabel(node) }}
+                <span
+                  v-if="shouldShowSender(entry, index, section.displayEntries)"
+                  class="senderLabel"
+                >
+                  {{ resolveSenderLabel(entry.node) }}
                 </span>
-                <div class="bubble" :class="node.sender === 'player' ? 'playerBubble' : 'npcBubble'">
-                  <span v-if="node.type === 'image' || node.type === 'link'" class="bubbleKind">
-                    {{ node.type === 'image' ? '图片短信' : '链接短信' }}
+                <div class="bubble" :class="entry.node.sender === 'player' ? 'playerBubble' : 'npcBubble'">
+                  <span
+                    v-if="entry.node.type === 'image' || entry.node.type === 'link'"
+                    class="bubbleKind"
+                  >
+                    {{ entry.node.type === 'image' ? '图片短信' : '链接短信' }}
                   </span>
                   <DetailTranslations
-                    :translations="node.translates"
+                    :translations="entry.node.translates"
                     :language-labels="languageLabelMap"
                     compact
                   />

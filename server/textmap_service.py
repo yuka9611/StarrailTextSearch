@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
@@ -1224,10 +1224,6 @@ class TextMapService:
                 ")"
             )
             params.extend(source_types)
-        else:
-            filters.append(
-                "EXISTS (SELECT 1 FROM text_source_link tsl WHERE tsl.text_hash = tm.hash)"
-            )
 
         fts_query = self._build_text_map_match_query(keyword, lang_code)
         where_sql = " AND ".join(filters)
@@ -1272,10 +1268,6 @@ class TextMapService:
                 ")"
             )
             params.extend(source_types)
-        else:
-            filters.append(
-                "EXISTS (SELECT 1 FROM text_source_link tsl WHERE tsl.text_hash = tm.hash)"
-            )
         fts_query = self._build_text_map_match_query(keyword, lang_code)
         where_sql = " AND ".join(filters)
         sql = (
@@ -1799,6 +1791,65 @@ class TextMapService:
             "translates": translates,
         }
 
+    def _collect_message_reachable(
+        self,
+        items_by_id: dict[int, sqlite3.Row],
+        start_ids: list[int],
+        *,
+        max_nodes: int = 5000,
+    ) -> dict[int, int]:
+        next_ids_by_item_id: dict[int, list[int]] = {}
+        for item_id, item in items_by_id.items():
+            next_ids_by_item_id[item_id] = [int(value) for value in json.loads(item["next_item_ids_json"] or "[]")]
+
+        depths: dict[int, int] = {}
+        queue: deque[tuple[int, int]] = deque()
+        for start_id in start_ids:
+            if start_id in items_by_id:
+                queue.append((start_id, 0))
+
+        while queue and len(depths) < max_nodes:
+            current_id, depth = queue.popleft()
+            if current_id in depths:
+                continue
+            depths[current_id] = depth
+            for next_id in next_ids_by_item_id.get(current_id, []):
+                if next_id in items_by_id and next_id not in depths:
+                    queue.append((next_id, depth + 1))
+
+        return depths
+
+    def _resolve_message_branch_join_id(
+        self,
+        items_by_id: dict[int, sqlite3.Row],
+        branch_start_ids_by_option: dict[int, list[int]],
+    ) -> int | None:
+        if not branch_start_ids_by_option:
+            return None
+
+        reachable_by_option = [
+            self._collect_message_reachable(items_by_id, start_ids)
+            for start_ids in branch_start_ids_by_option.values()
+        ]
+        if not reachable_by_option:
+            return None
+
+        common: set[int] | None = None
+        for reachable in reachable_by_option:
+            if common is None:
+                common = set(reachable.keys())
+            else:
+                common &= set(reachable.keys())
+            if not common:
+                return None
+
+        def sort_key(candidate_id: int) -> tuple[int, int, int]:
+            max_depth = max(reachable.get(candidate_id, 10**9) for reachable in reachable_by_option)
+            item_order = int(items_by_id[candidate_id]["item_order"] or 0) if candidate_id in items_by_id else 0
+            return (max_depth, item_order, candidate_id)
+
+        return min(common, key=sort_key) if common else None
+
     def _append_message_nodes(
         self,
         nodes: list[dict[str, object]],
@@ -1811,7 +1862,10 @@ class TextMapService:
         result_langs: list[str],
         player_name: str,
         player_gender: str,
+        stop_item_ids: set[int] | None = None,
     ) -> None:
+        if stop_item_ids and item_id in stop_item_ids:
+            return
         if item_id in visited:
             return
         item = items_by_id.get(item_id)
@@ -1843,9 +1897,12 @@ class TextMapService:
 
         if option_children and all(child["option_text_hash"] for child in option_children):
             options = []
-            next_candidates: set[int] = set()
+            option_branches = []
+            branch_start_ids_by_option: dict[int, list[int]] = {}
+
             for child in option_children:
-                visited.add(int(child["item_id"]))
+                child_id = int(child["item_id"])
+                visited.add(child_id)
                 option_translates = self._resolve_translations(
                     resolver,
                     child["option_text_hash"],
@@ -1862,31 +1919,64 @@ class TextMapService:
                 )
                 options.append(
                     {
-                        "itemId": int(child["item_id"]),
+                        "itemId": child_id,
                         "label": option_translates,
                         "content": content_translates,
                     }
                 )
-                child_next_ids = [int(value) for value in json.loads(child["next_item_ids_json"] or "[]")]
-                next_candidates.update(child_next_ids)
+                branch_start_ids_by_option[child_id] = [
+                    int(value) for value in json.loads(child["next_item_ids_json"] or "[]")
+                ]
+
+            join_id = self._resolve_message_branch_join_id(items_by_id, branch_start_ids_by_option)
+
+            for option_item_id, start_ids in branch_start_ids_by_option.items():
+                branch_nodes: list[dict[str, object]] = []
+                branch_visited: set[int] = set()
+                for start_id in start_ids:
+                    self._append_message_nodes(
+                        branch_nodes,
+                        items_by_id,
+                        resolver,
+                        branch_visited,
+                        start_id,
+                        source_lang=source_lang,
+                        result_langs=result_langs,
+                        player_name=player_name,
+                        player_gender=player_gender,
+                        stop_item_ids={join_id} if join_id else None,
+                    )
+                if branch_visited:
+                    visited.update(branch_visited)
+                option_branches.append(
+                    {
+                        "optionItemId": option_item_id,
+                        "nodes": branch_nodes,
+                    }
+                )
+
             nodes.append(
                 {
                     "type": "option_group",
                     "sender": "player",
+                    "groupId": int(item["item_id"]),
                     "options": options,
+                    "optionBranches": option_branches,
                 }
             )
-            for next_id in sorted(next_candidates):
+
+            if join_id is not None:
                 self._append_message_nodes(
                     nodes,
                     items_by_id,
                     resolver,
                     visited,
-                    next_id,
+                    join_id,
                     source_lang=source_lang,
                     result_langs=result_langs,
                     player_name=player_name,
                     player_gender=player_gender,
+                    stop_item_ids=stop_item_ids,
                 )
             return
 
@@ -1901,6 +1991,7 @@ class TextMapService:
                 result_langs=result_langs,
                 player_name=player_name,
                 player_gender=player_gender,
+                stop_item_ids=stop_item_ids,
             )
 
     def _map_message_node_type(self, item: sqlite3.Row) -> str:
