@@ -12,6 +12,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from browser_session import (
+    disconnect_browser_client,
+    is_browser_auto_shutdown_enabled,
+    start_browser_session_watchdog,
+    touch_browser_client,
+)
 from textmap_service import (
     DEFAULT_LANGUAGE,
     DEFAULT_PAGE_SIZE,
@@ -51,6 +57,24 @@ class StarrailRequestHandler(BaseHTTPRequestHandler):
             return
         self._serve_frontend(parsed_url.path)
 
+    def do_POST(self) -> None:
+        parsed_url = urlparse(self.path)
+        if parsed_url.path in {
+            "/api/browser-session/heartbeat",
+            "/api/browser-session/disconnect",
+        }:
+            self._handle_browser_session_request(parsed_url.path)
+            return
+
+        if parsed_url.path.startswith("/api/"):
+            self._write_json(
+                HTTPStatus.METHOD_NOT_ALLOWED,
+                {"error": f"接口不支持 POST：{parsed_url.path}"},
+            )
+            return
+
+        self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
+
     def log_message(self, format: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {self.address_string()} {format % args}")
 
@@ -61,6 +85,19 @@ class StarrailRequestHandler(BaseHTTPRequestHandler):
             result_langs = _get_list_param(params, "resultLangs")
             player_name = _get_first_param(params, "playerName", DEFAULT_PLAYER_NAME)
             player_gender = _get_first_param(params, "playerGender", DEFAULT_PLAYER_GENDER)
+
+            if parsed_url.path == "/api/startupStatus":
+                self._write_json(
+                    HTTPStatus.OK,
+                    {
+                        "data": {
+                            "browserAutoShutdownEnabled": is_browser_auto_shutdown_enabled(),
+                        },
+                        "code": 200,
+                        "msg": "ok",
+                    },
+                )
+                return
 
             if parsed_url.path == "/api/meta":
                 self._write_json(HTTPStatus.OK, self.service.get_meta(source_lang=source_lang))
@@ -303,6 +340,66 @@ class StarrailRequestHandler(BaseHTTPRequestHandler):
                 {"error": f"服务器内部错误：{error}"},
             )
 
+    def _handle_browser_session_request(self, path: str) -> None:
+        try:
+            client_id = self._get_browser_client_id()
+            if not client_id:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Missing clientId"})
+                return
+
+            if path == "/api/browser-session/heartbeat":
+                active_clients = touch_browser_client(client_id)
+            else:
+                active_clients = disconnect_browser_client(client_id)
+
+            self._write_json(
+                HTTPStatus.OK,
+                {
+                    "data": {
+                        "activeClients": active_clients,
+                        "autoShutdownEnabled": is_browser_auto_shutdown_enabled(),
+                    },
+                    "code": 200,
+                    "msg": "ok",
+                },
+            )
+        except Exception as error:  # pragma: no cover - defensive branch
+            self._write_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"服务器内部错误：{error}"},
+            )
+
+    def _get_browser_client_id(self) -> str:
+        payload = self._read_post_payload()
+        if isinstance(payload, dict):
+            client_id = payload.get("clientId", "")
+            if isinstance(client_id, str):
+                client_id = client_id.strip()
+                if client_id:
+                    return client_id
+        return ""
+
+    def _read_post_payload(self) -> dict:
+        raw_length = self.headers.get("Content-Length", "").strip()
+        try:
+            content_length = int(raw_length) if raw_length else 0
+        except ValueError:
+            content_length = 0
+        if content_length <= 0:
+            return {}
+
+        raw_body = self.rfile.read(content_length)
+        content_type = self.headers.get("Content-Type", "")
+        if "application/x-www-form-urlencoded" in content_type:
+            parsed = parse_qs(raw_body.decode("utf-8", errors="replace"))
+            return {key: values[0] for key, values in parsed.items() if values}
+
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
     def _serve_frontend(self, request_path: str) -> None:
         if WEB_DIST_DIR.is_dir():
             target_path = self._resolve_dist_target(request_path)
@@ -346,7 +443,7 @@ class StarrailRequestHandler(BaseHTTPRequestHandler):
     def _send_api_headers(self, content_type: str) -> None:
         self.send_header("Content-Type", content_type)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
 
@@ -409,6 +506,7 @@ def run() -> None:
     try:
         print(f"StarrailTextSearch server running at http://127.0.0.1:5000/")
         print(f"TextMap directory: {DATA_ROOT / 'TextMap'}")
+        start_browser_session_watchdog(logger=print, shutdown_callback=server.shutdown)
         maybe_open_browser("http://127.0.0.1:5000/")
         server.serve_forever()
     except KeyboardInterrupt:
