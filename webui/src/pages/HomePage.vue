@@ -8,7 +8,7 @@ const route = useRoute()
 const contentPane = ref(null)
 const isCompactScreen = ref(false)
 
-const keepAliveViews = new Set(['search', 'mission-book', 'message', 'voice', 'story', 'settings'])
+const keepAliveViews = new Set(['search', 'mission-book', 'talk', 'message', 'voice', 'story', 'settings'])
 
 const activePath = computed(() => {
   if (route.path !== '/detail') {
@@ -18,6 +18,9 @@ const activePath = computed(() => {
   const kind = String(route.query.kind || '').toLowerCase()
   if (kind === 'mission' || kind === 'book') {
     return '/mission-book'
+  }
+  if (kind === 'talk') {
+    return '/talk'
   }
   if (kind === 'message') {
     return '/message'
@@ -119,6 +122,9 @@ watch(
         </el-menu-item>
         <el-menu-item index="/mission-book">
           任务 / 书籍搜索
+        </el-menu-item>
+        <el-menu-item index="/talk">
+          对话搜索
         </el-menu-item>
         <el-menu-item index="/message">
           短信搜索

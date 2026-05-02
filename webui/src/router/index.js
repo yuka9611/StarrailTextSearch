@@ -28,6 +28,16 @@ const router = createRouter({
           }
         },
         {
+          path: 'talk',
+          name: 'talk',
+          component: () => import('@/views/TalkView.vue'),
+          meta: {
+            title: '对话搜索',
+            keepAlive: true,
+            viewKey: 'talk'
+          }
+        },
+        {
           path: 'message',
           name: 'message',
           component: () => import('@/views/MessageView.vue'),

@@ -79,6 +79,14 @@ export function fetchBookDetail(params) {
   return requestJson('/api/book/detail', params)
 }
 
+export function searchTalks(params) {
+  return requestJson('/api/talk/search', params)
+}
+
+export function fetchTalkDetail(params) {
+  return requestJson('/api/talk/detail', params)
+}
+
 export function searchMessages(params) {
   return requestJson('/api/message/search', params)
 }

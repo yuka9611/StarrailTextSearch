@@ -7,6 +7,7 @@ import {
   fetchMessageDetail,
   fetchMissionDetail,
   fetchStoryDetail,
+  fetchTalkDetail,
   fetchTextSources,
   fetchVoiceDetail
 } from '@/api/textSearch'
@@ -41,6 +42,9 @@ const detailTitle = computed(() => {
   }
   if (payload.kind === 'book') {
     return toCopyableText(payload.title || '') || '书籍详情'
+  }
+  if (payload.kind === 'talk') {
+    return toCopyableText(payload.title || '') || `TalkSentenceID ${payload.talkSentenceId || ''}`.trim()
   }
   if (payload.kind === 'message') {
     return toCopyableText(payload.displayName || '') || '短信详情'
@@ -126,6 +130,12 @@ async function loadDetail() {
       case 'book':
         payload = await fetchBookDetail({
           bookId: route.query.bookId,
+          ...common
+        })
+        break
+      case 'talk':
+        payload = await fetchTalkDetail({
+          talkSentenceId: route.query.talkSentenceId,
           ...common
         })
         break
@@ -316,6 +326,23 @@ function expandMessageNodes(sectionId, nodes) {
         <div v-if="detail.comment" class="infoCard">
           <span class="infoLabel">注释</span>
           <p>{{ detail.comment }}</p>
+        </div>
+      </div>
+      <DetailTranslations
+        :translations="detail.translates"
+        :language-labels="languageLabelMap"
+      />
+    </div>
+
+    <div v-else-if="detail?.kind === 'talk'" class="panel detailBody">
+      <div class="infoGrid">
+        <div class="infoCard">
+          <span class="infoLabel">说话人</span>
+          <strong>{{ detail.speaker || '旁白' }}</strong>
+        </div>
+        <div v-if="detail.voiceId" class="infoCard">
+          <span class="infoLabel">Voice ID</span>
+          <strong>{{ detail.voiceId }}</strong>
         </div>
       </div>
       <DetailTranslations
