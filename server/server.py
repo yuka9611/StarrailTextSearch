@@ -146,6 +146,31 @@ class StarrailRequestHandler(BaseHTTPRequestHandler):
                 self._write_json(HTTPStatus.OK, payload)
                 return
 
+            if parsed_url.path == "/api/talk/search":
+                payload = self.service.search_talks(
+                    keyword=_get_first_param(params, "keyword", ""),
+                    speaker_keyword=_get_first_param(params, "speakerKeyword", ""),
+                    lang_code=_get_first_param(params, "lang", DEFAULT_LANGUAGE),
+                    source_lang=source_lang,
+                    created_version=_get_optional_param(params, "createdVersion"),
+                    updated_version=_get_optional_param(params, "updatedVersion"),
+                    page=_parse_int_param(params, "page", 1),
+                    size=_parse_int_param(params, "size", DEFAULT_PAGE_SIZE),
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
+            if parsed_url.path == "/api/talk/detail":
+                payload = self.service.get_talk_detail(
+                    talk_sentence_id=_parse_required_int_param(params, "talkSentenceId"),
+                    source_lang=source_lang,
+                    result_langs=result_langs,
+                    player_name=player_name,
+                    player_gender=player_gender,
+                )
+                self._write_json(HTTPStatus.OK, payload)
+                return
+
             if parsed_url.path == "/api/message/search":
                 payload = self.service.search_messages(
                     keyword=_get_first_param(params, "keyword", ""),

@@ -21,6 +21,7 @@ from dbBuild.builder import (
     _vacuum_database,
     extract_talk_sentence_refs,
     hash_text,
+    iter_mission_story_dirs,
     normalize_hash,
     parse_version,
 )
@@ -406,8 +407,8 @@ class SnapshotLoader:
         return result
 
     def _load_missions(self, talk_sentence_map: dict[int, TalkSentenceLite]) -> dict[int, str]:
-        mission_root = self.story_root / "Mission"
-        if not mission_root.is_dir():
+        mission_dirs = list(iter_mission_story_dirs(self.story_root))
+        if not mission_dirs:
             return {}
 
         mission_name_hash: dict[int, str | None] = {}
@@ -419,33 +420,28 @@ class SnapshotLoader:
 
         tracked_ids = set(self.tracking.mission_ids)
         snapshot: dict[int, str] = {}
-        for mission_dir in sorted(mission_root.iterdir()):
-            if not mission_dir.is_dir():
-                continue
-            try:
-                mission_id = int(mission_dir.name)
-            except ValueError:
-                continue
+        for mission_id, mission_dir_paths in mission_dirs:
             if mission_id not in tracked_ids:
                 continue
 
             story_paths: list[str] = []
             lines: list[tuple[str, str, int, str | None, str | None]] = []
-            for story_path in sorted(mission_dir.glob("*.json")):
-                relative_path = str(story_path.relative_to(self.root))
-                story_paths.append(relative_path)
-                payload = self._load_json(story_path, {})
-                for talk_sentence_id, line_type in extract_talk_sentence_refs(payload):
-                    talk_sentence = talk_sentence_map.get(int(talk_sentence_id))
-                    lines.append(
-                        (
-                            relative_path,
-                            str(line_type),
-                            int(talk_sentence_id),
-                            talk_sentence.speaker_hash if talk_sentence else None,
-                            talk_sentence.text_hash if talk_sentence else None,
+            for mission_dir in mission_dir_paths:
+                for story_path in sorted(mission_dir.glob("*.json")):
+                    relative_path = str(story_path.relative_to(self.root))
+                    story_paths.append(relative_path)
+                    payload = self._load_json(story_path, {})
+                    for talk_sentence_id, line_type in extract_talk_sentence_refs(payload):
+                        talk_sentence = talk_sentence_map.get(int(talk_sentence_id))
+                        lines.append(
+                            (
+                                relative_path,
+                                str(line_type),
+                                int(talk_sentence_id),
+                                talk_sentence.speaker_hash if talk_sentence else None,
+                                talk_sentence.text_hash if talk_sentence else None,
+                            )
                         )
-                    )
 
             if not story_paths and not lines and mission_id not in mission_name_hash:
                 continue
@@ -938,6 +934,7 @@ def update_text_map_versions(
 
 def rebuild_dependent_indexes(connection: sqlite3.Connection, current_version_id: int) -> None:
     builder = StarrailDatabaseBuilder(DB_PATH)
+    builder._rebuild_talk_sentence_versions(connection, current_version_id)
     builder._rebuild_sources(connection, current_version_id)
     builder._rebuild_text_map_fts(connection)
     builder._rebuild_entity_search(connection, current_version_id)

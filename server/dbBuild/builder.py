@@ -240,6 +240,20 @@ CREATE TABLE IF NOT EXISTS story_entry (
 
 CREATE INDEX IF NOT EXISTS story_entry_avatar_sort_index ON story_entry(avatar_id, sort_id, story_id);
 
+CREATE TABLE IF NOT EXISTS talk_sentence (
+    talk_sentence_id INTEGER PRIMARY KEY,
+    speaker_hash TEXT,
+    text_hash TEXT,
+    voice_id INTEGER,
+    created_version_id INTEGER NOT NULL,
+    updated_version_id INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS talk_sentence_speaker_hash_index ON talk_sentence(speaker_hash);
+CREATE INDEX IF NOT EXISTS talk_sentence_text_hash_index ON talk_sentence(text_hash);
+CREATE INDEX IF NOT EXISTS talk_sentence_created_index ON talk_sentence(created_version_id);
+CREATE INDEX IF NOT EXISTS talk_sentence_updated_index ON talk_sentence(updated_version_id);
+
 CREATE TABLE IF NOT EXISTS source_record (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_type TEXT NOT NULL,
@@ -527,20 +541,43 @@ def resolve_gender_pair(male_text: str, female_text: str, player_gender: str) ->
 def extract_talk_sentence_refs(payload: object) -> list[tuple[int, str]]:
     results: list[tuple[int, str]] = []
 
+    def append_result(raw_value: object | None, line_type: str) -> None:
+        normalized_value = normalize_hash(raw_value)
+        if normalized_value is None:
+            return
+        results.append((int(normalized_value), line_type))
+
     def walk(node: object, *, context: str = "dialogue") -> None:
         if isinstance(node, dict):
             task_type = str(node.get("$type", ""))
             if task_type.endswith("PlayOptionTalk"):
                 for item in node.get("OptionList", []) or []:
-                    talk_sentence_id = item.get("TalkSentenceID")
-                    if talk_sentence_id is not None:
-                        results.append((int(talk_sentence_id), "option"))
+                    append_result(item.get("TalkSentenceID"), "option")
                 return
-            if task_type.endswith("PlaySimpleTalk"):
-                for item in node.get("SimpleTalkList", []) or []:
-                    talk_sentence_id = item.get("TalkSentenceID")
-                    if talk_sentence_id is not None:
-                        results.append((int(talk_sentence_id), "dialogue"))
+            if task_type.endswith("PlaySimpleTalk") or task_type.endswith("PlayMissionTalk"):
+                talk_list = node.get("SimpleTalkList")
+                if not isinstance(talk_list, list):
+                    talk_list = node.get("MissionTalkList")
+                for item in talk_list or []:
+                    append_result(item.get("TalkSentenceID"), "dialogue")
+                return
+            if task_type in {"RPG.GameCore.PlayScreenTransfer", "RPG.GameCore.PerformanceTransition"}:
+                if node.get("TextEnabled") is not False:
+                    append_result(node.get("TalkSentenceID"), "dialogue")
+                return
+            if task_type in {"RPG.GameCore.PerformanceEndBlackText", "RPG.GameCore.PlayMultiVoiceTalk"}:
+                append_result(node.get("TalkSentenceID"), "dialogue")
+                return
+            if task_type == "RPG.GameCore.PlayFullScreenTransfer":
+                text_info = node.get("TextInfo")
+                if isinstance(text_info, dict):
+                    for item in text_info.get("TextList") or []:
+                        append_result(item.get("TalkSentenceID"), context)
+                return
+            if task_type == "RPG.GameCore.SelectMissionItem":
+                simple_talk = node.get("SimpleTalk")
+                if isinstance(simple_talk, dict):
+                    append_result(simple_talk.get("TalkSentenceID"), "dialogue")
                 return
             for key, value in node.items():
                 next_context = context
@@ -555,6 +592,25 @@ def extract_talk_sentence_refs(payload: object) -> list[tuple[int, str]]:
 
     walk(payload)
     return results
+
+
+def iter_mission_story_dirs(story_root: Path) -> Iterable[tuple[int, list[Path]]]:
+    grouped: dict[int, list[Path]] = {}
+    for mission_root in [story_root / "Discussion" / "Mission", story_root / "Mission"]:
+        if not mission_root.is_dir():
+            continue
+        for mission_dir in sorted(mission_root.glob("*")):
+            if not mission_dir.is_dir():
+                continue
+            try:
+                mission_id = int(mission_dir.name)
+            except ValueError:
+                continue
+            bucket = grouped.setdefault(mission_id, [])
+            if mission_dir not in bucket:
+                bucket.append(mission_dir)
+    for mission_id in sorted(grouped):
+        yield mission_id, sorted(grouped[mission_id], key=lambda path: str(path))
 
 
 class StarrailDatabaseBuilder:
@@ -601,6 +657,7 @@ class StarrailDatabaseBuilder:
                 print("Importing structured entities...")
             talk_sentence_map = self._load_talk_sentence_map()
             self._import_missions(connection, talk_sentence_map, version_id)
+            self._import_talk_sentences(connection, talk_sentence_map, version_id)
             self._import_books(connection, version_id)
             self._import_messages(connection, version_id)
             self._import_voices(connection, version_id)
@@ -833,31 +890,26 @@ class StarrailDatabaseBuilder:
 
         mission_rows = []
         line_rows = []
-        for mission_dir in sorted((STORY_ROOT / "Mission").glob("*")):
-            if not mission_dir.is_dir():
-                continue
-            try:
-                mission_id = int(mission_dir.name)
-            except ValueError:
-                continue
+        for mission_id, mission_dirs in iter_mission_story_dirs(STORY_ROOT):
             story_paths: list[str] = []
             line_count = 0
-            for story_path in sorted(mission_dir.glob("*.json")):
-                story_paths.append(str(story_path.relative_to(DATA_ROOT)))
-                payload = json_load(story_path)
-                talk_refs = extract_talk_sentence_refs(payload)
-                for offset, (talk_sentence_id, line_type) in enumerate(talk_refs):
-                    talk_sentence = talk_sentence_map.get(talk_sentence_id)
-                    line_rows.append((
-                        mission_id,
-                        str(story_path.relative_to(DATA_ROOT)),
-                        line_count + offset,
-                        line_type,
-                        talk_sentence_id,
-                        talk_sentence.speaker_hash if talk_sentence else None,
-                        talk_sentence.text_hash if talk_sentence else None,
-                    ))
-                line_count += len(talk_refs)
+            for mission_dir in mission_dirs:
+                for story_path in sorted(mission_dir.glob("*.json")):
+                    story_paths.append(str(story_path.relative_to(DATA_ROOT)))
+                    payload = json_load(story_path)
+                    talk_refs = extract_talk_sentence_refs(payload)
+                    for offset, (talk_sentence_id, line_type) in enumerate(talk_refs):
+                        talk_sentence = talk_sentence_map.get(talk_sentence_id)
+                        line_rows.append((
+                            mission_id,
+                            str(story_path.relative_to(DATA_ROOT)),
+                            line_count + offset,
+                            line_type,
+                            talk_sentence_id,
+                            talk_sentence.speaker_hash if talk_sentence else None,
+                            talk_sentence.text_hash if talk_sentence else None,
+                        ))
+                    line_count += len(talk_refs)
             mission_rows.append((
                 mission_id,
                 "main",
@@ -882,6 +934,39 @@ class StarrailDatabaseBuilder:
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             line_rows,
+        )
+
+    def _import_talk_sentences(
+        self,
+        connection: sqlite3.Connection,
+        talk_sentence_map: dict[int, TalkSentence],
+        version_id: int,
+    ) -> None:
+        connection.execute("DELETE FROM talk_sentence")
+        linked_talk_sentence_ids = {
+            int(row[0])
+            for row in connection.execute("SELECT DISTINCT talk_sentence_id FROM mission_line").fetchall()
+            if row[0] is not None
+        }
+        rows = [
+            (
+                talk_sentence_id,
+                talk_sentence.speaker_hash,
+                talk_sentence.text_hash,
+                talk_sentence.voice_id,
+                version_id,
+                version_id,
+            )
+            for talk_sentence_id, talk_sentence in sorted(talk_sentence_map.items())
+            if talk_sentence_id not in linked_talk_sentence_ids
+        ]
+        connection.executemany(
+            """
+            INSERT INTO talk_sentence(
+                talk_sentence_id, speaker_hash, text_hash, voice_id, created_version_id, updated_version_id
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            rows,
         )
 
     def _import_books(self, connection: sqlite3.Connection, version_id: int) -> None:
@@ -1344,6 +1429,36 @@ class StarrailDatabaseBuilder:
                 content = ''
             )
             """
+        )
+
+    def _rebuild_talk_sentence_versions(self, connection: sqlite3.Connection, current_version_id: int) -> None:
+        connection.execute(
+            """
+            WITH hash_versions AS (
+                SELECT
+                    ts.talk_sentence_id AS talk_sentence_id,
+                    COALESCE(MIN(tm.created_version_id), ?) AS created_version_id,
+                    COALESCE(MAX(tm.updated_version_id), ?) AS updated_version_id
+                FROM talk_sentence ts
+                LEFT JOIN text_map tm
+                    ON tm.scope='normal'
+                    AND tm.hash IN (ts.speaker_hash, ts.text_hash)
+                GROUP BY ts.talk_sentence_id
+            )
+            UPDATE talk_sentence
+            SET created_version_id = (
+                    SELECT hash_versions.created_version_id
+                    FROM hash_versions
+                    WHERE hash_versions.talk_sentence_id = talk_sentence.talk_sentence_id
+                ),
+                updated_version_id = (
+                    SELECT hash_versions.updated_version_id
+                    FROM hash_versions
+                    WHERE hash_versions.talk_sentence_id = talk_sentence.talk_sentence_id
+                )
+            """
+            ,
+            (current_version_id, current_version_id),
         )
 
     def _build_mission_search_rows(

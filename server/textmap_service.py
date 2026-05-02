@@ -120,6 +120,7 @@ class TextMapService:
             "availablePages": [
                 "search",
                 "mission-book",
+                "talk",
                 "message",
                 "voice",
                 "story",
@@ -326,6 +327,66 @@ class TextMapService:
             page=page,
             size=size,
         )
+
+    def search_talks(
+        self,
+        keyword: str,
+        *,
+        speaker_keyword: str = "",
+        lang_code: str,
+        source_lang: str = DEFAULT_SOURCE_LANGUAGE,
+        created_version: str | None = None,
+        updated_version: str | None = None,
+        page: int = 1,
+        size: int = 30,
+    ) -> dict[str, object]:
+        self._ensure_database()
+        normalized_language = self._normalize_language_code(lang_code)
+        normalized_source_lang = self._normalize_language_code(source_lang or DEFAULT_SOURCE_LANGUAGE)
+        normalized_keyword = self._normalize_keyword(keyword)
+        normalized_speaker_keyword = self._normalize_keyword(speaker_keyword)
+        page, size = self._normalize_page(page, size)
+
+        with self._connect() as connection:
+            resolver = TextMapCache(connection)
+            total = self._count_talk_search(
+                connection,
+                keyword=normalized_keyword,
+                speaker_keyword=normalized_speaker_keyword,
+                lang_code=normalized_language,
+                created_version=created_version,
+                updated_version=updated_version,
+            )
+            rows = self._query_talk_search(
+                connection,
+                keyword=normalized_keyword,
+                speaker_keyword=normalized_speaker_keyword,
+                lang_code=normalized_language,
+                created_version=created_version,
+                updated_version=updated_version,
+                limit=size,
+                offset=(page - 1) * size,
+            )
+            results = [
+                self._build_talk_search_result(
+                    resolver,
+                    row,
+                    lang_code=normalized_language,
+                )
+                for row in rows
+            ]
+
+        return {
+            "keyword": keyword,
+            "speakerKeyword": speaker_keyword,
+            "lang": normalized_language,
+            "sourceLang": normalized_source_lang,
+            "entityType": "talk",
+            "page": page,
+            "size": size,
+            "total": total,
+            "results": results,
+        }
 
     def search_messages(
         self,
@@ -777,6 +838,52 @@ class TextMapService:
                 ),
             }
 
+    def get_talk_detail(
+        self,
+        talk_sentence_id: int,
+        *,
+        source_lang: str = DEFAULT_SOURCE_LANGUAGE,
+        result_langs: list[str] | None = None,
+        player_name: str | None = None,
+        player_gender: str = DEFAULT_PLAYER_GENDER,
+    ) -> dict[str, object]:
+        self._ensure_database()
+        with self._connect() as connection:
+            resolver = TextMapCache(connection)
+            row = connection.execute(
+                "SELECT * FROM talk_sentence WHERE talk_sentence_id=?",
+                (talk_sentence_id,),
+            ).fetchone()
+            if row is None:
+                raise DataUnavailableError(f"未找到对白：{talk_sentence_id}")
+            normalized_source_lang = self._normalize_language_code(source_lang or DEFAULT_SOURCE_LANGUAGE)
+            normalized_result_langs = self._resolve_result_languages(result_langs or [], normalized_source_lang)
+            normalized_player_name = self._normalize_player_name(player_name)
+            normalized_player_gender = self._normalize_player_gender(player_gender)
+            speaker = resolver.get_normalized_text(
+                row["speaker_hash"],
+                normalized_source_lang,
+                prefer_main=True,
+                player_name=normalized_player_name,
+                player_gender=normalized_player_gender,
+            ) or "旁白"
+            return {
+                "kind": "talk",
+                "title": f"TalkSentenceID {talk_sentence_id}",
+                "talkSentenceId": int(talk_sentence_id),
+                "speaker": speaker,
+                "voiceId": int(row["voice_id"]) if row["voice_id"] is not None else None,
+                "createdVersion": self._resolve_version_tag(connection, row["created_version_id"]),
+                "updatedVersion": self._resolve_version_tag(connection, row["updated_version_id"]),
+                "translates": self._resolve_translations(
+                    resolver,
+                    row["text_hash"],
+                    normalized_result_langs,
+                    player_name=normalized_player_name,
+                    player_gender=normalized_player_gender,
+                ),
+            }
+
     def get_message_detail(
         self,
         thread_id: int,
@@ -1079,6 +1186,174 @@ class TextMapService:
             "size": size,
             "total": total,
             "results": results,
+        }
+
+    def _build_talk_search_query_parts(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        keyword: str,
+        speaker_keyword: str,
+        lang_code: str,
+        created_version: str | None,
+        updated_version: str | None,
+    ) -> tuple[str, str, str, list[Any], list[Any], int | None]:
+        with_clauses: list[str] = []
+        join_clauses: list[str] = []
+        with_params: list[Any] = []
+        where_filters = ["1=1"]
+        where_params: list[Any] = []
+
+        created_version_id = self._resolve_version_filter_id(connection, created_version)
+        updated_version_id = self._resolve_version_filter_id(connection, updated_version)
+        if created_version_id is not None:
+            where_filters.append("ts.created_version_id=?")
+            where_params.append(created_version_id)
+        if updated_version_id is not None:
+            where_filters.append("ts.updated_version_id=?")
+            where_params.append(updated_version_id)
+
+        exact_talk_sentence_id = int(keyword) if keyword.isdigit() else None
+        if keyword:
+            with_clauses.append(
+                """
+                matched_talk_text AS MATERIALIZED (
+                    SELECT tm.hash AS text_hash
+                    FROM text_map tm
+                    JOIN text_map_fts ON text_map_fts.rowid = tm.id
+                    WHERE tm.scope='normal'
+                      AND tm.lang=?
+                      AND text_map_fts MATCH ?
+                )
+                """
+            )
+            with_params.extend([lang_code, self._build_text_map_match_query(keyword, lang_code)])
+            join_clauses.append("LEFT JOIN matched_talk_text mtt ON mtt.text_hash = ts.text_hash")
+            keyword_filters = ["mtt.text_hash IS NOT NULL"]
+            if exact_talk_sentence_id is not None:
+                keyword_filters.insert(0, "ts.talk_sentence_id=?")
+                where_params.append(exact_talk_sentence_id)
+            where_filters.append(f"({' OR '.join(keyword_filters)})")
+
+        if speaker_keyword:
+            with_clauses.append(
+                """
+                matched_talk_speaker AS MATERIALIZED (
+                    SELECT tm.hash AS speaker_hash
+                    FROM text_map tm
+                    JOIN text_map_fts ON text_map_fts.rowid = tm.id
+                    WHERE tm.scope='normal'
+                      AND tm.lang=?
+                      AND text_map_fts MATCH ?
+                )
+                """
+            )
+            with_params.extend([lang_code, self._build_text_map_match_query(speaker_keyword, lang_code)])
+            join_clauses.append("LEFT JOIN matched_talk_speaker mts ON mts.speaker_hash = ts.speaker_hash")
+            where_filters.append("mts.speaker_hash IS NOT NULL")
+
+        with_sql = f"WITH {', '.join(with_clauses)} " if with_clauses else ""
+        join_sql = f"{' '.join(join_clauses)} " if join_clauses else ""
+        where_sql = " AND ".join(where_filters)
+        return with_sql, join_sql, where_sql, with_params, where_params, exact_talk_sentence_id
+
+    def _count_talk_search(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        keyword: str,
+        speaker_keyword: str,
+        lang_code: str,
+        created_version: str | None,
+        updated_version: str | None,
+    ) -> int:
+        with_sql, join_sql, where_sql, with_params, where_params, _ = self._build_talk_search_query_parts(
+            connection,
+            keyword=keyword,
+            speaker_keyword=speaker_keyword,
+            lang_code=lang_code,
+            created_version=created_version,
+            updated_version=updated_version,
+        )
+        sql = f"{with_sql}SELECT COUNT(*) FROM talk_sentence ts {join_sql}WHERE {where_sql}"
+        return int(connection.execute(sql, [*with_params, *where_params]).fetchone()[0])
+
+    def _query_talk_search(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        keyword: str,
+        speaker_keyword: str,
+        lang_code: str,
+        created_version: str | None,
+        updated_version: str | None,
+        limit: int,
+        offset: int,
+    ) -> list[sqlite3.Row]:
+        with_sql, join_sql, where_sql, with_params, where_params, exact_talk_sentence_id = (
+            self._build_talk_search_query_parts(
+                connection,
+                keyword=keyword,
+                speaker_keyword=speaker_keyword,
+                lang_code=lang_code,
+                created_version=created_version,
+                updated_version=updated_version,
+            )
+        )
+        order_parts: list[str] = []
+        order_params: list[Any] = []
+        if exact_talk_sentence_id is not None:
+            order_parts.append("CASE WHEN ts.talk_sentence_id=? THEN 0 ELSE 1 END")
+            order_params.append(exact_talk_sentence_id)
+        order_parts.extend([
+            "COALESCE(cv.version_sort_key, 0) ASC",
+            "ts.talk_sentence_id ASC",
+        ])
+        sql = (
+            f"{with_sql}"
+            "SELECT ts.*, cv.version_tag AS created_version_tag, uv.version_tag AS updated_version_tag, "
+            "COALESCE(cv.version_sort_key, 0) AS created_sort_key "
+            "FROM talk_sentence ts "
+            "LEFT JOIN version_dim cv ON cv.id = ts.created_version_id "
+            "LEFT JOIN version_dim uv ON uv.id = ts.updated_version_id "
+            f"{join_sql}"
+            f"WHERE {where_sql} "
+            f"ORDER BY {', '.join(order_parts)} "
+            "LIMIT ? OFFSET ?"
+        )
+        return connection.execute(
+            sql,
+            [*with_params, *where_params, *order_params, limit, offset],
+        ).fetchall()
+
+    def _build_talk_search_result(
+        self,
+        resolver: TextMapCache,
+        row: sqlite3.Row,
+        *,
+        lang_code: str,
+    ) -> dict[str, object]:
+        talk_sentence_id = int(row["talk_sentence_id"])
+        speaker = resolver.get_normalized_text(
+            row["speaker_hash"],
+            lang_code,
+            prefer_main=True,
+        ) or "旁白"
+        preview_text = resolver.get_normalized_text(
+            row["text_hash"],
+            lang_code,
+        )
+        return {
+            "entityType": "talk",
+            "entityKey": str(talk_sentence_id),
+            "talkSentenceId": talk_sentence_id,
+            "title": f"TalkSentenceID {talk_sentence_id}",
+            "speaker": speaker,
+            "preview": summarize_text(preview_text),
+            "voiceId": int(row["voice_id"]) if row["voice_id"] is not None else None,
+            "createdVersion": str(row["created_version_tag"] or ""),
+            "updatedVersion": str(row["updated_version_tag"] or ""),
+            "detailQuery": {"kind": "talk", "talkSentenceId": str(talk_sentence_id)},
         }
 
     def _query_entity_search(
@@ -2075,6 +2350,8 @@ class TextMapService:
             return {"kind": "mission", "missionId": source_key}
         if source_type == "book":
             return {"kind": "book", "bookId": source_key}
+        if source_type == "talk":
+            return {"kind": "talk", "talkSentenceId": source_key}
         if source_type == "message":
             return {"kind": "message", "threadId": source_key}
         if source_type == "voice":
