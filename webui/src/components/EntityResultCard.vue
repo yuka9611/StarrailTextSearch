@@ -14,6 +14,10 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  emptyPreviewText: {
+    type: String,
+    default: '暂无摘要'
+  },
   eyebrow: {
     type: String,
     default: '条目'
@@ -48,7 +52,12 @@ function openDetail() {
       ID / Key: {{ item.entityKey }}
     </p>
 
-    <StylizedText :text="item.preview || '暂无摘要'" :keyword="keyword" class="previewText" />
+    <StylizedText
+      v-if="item.preview || emptyPreviewText"
+      :text="item.preview || emptyPreviewText"
+      :keyword="keyword"
+      class="previewText"
+    />
 
     <div class="actionRow">
       <el-button type="primary" @click="openDetail">

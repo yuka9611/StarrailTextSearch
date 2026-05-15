@@ -763,17 +763,36 @@ class TextMapService:
                 player_name=normalized_player_name,
                 player_gender=normalized_player_gender,
             ) or f"任务 {mission_id}"
+            section_rows = connection.execute(
+                """
+                SELECT section_id, section_order, title_hash, fallback_title, description_hash,
+                       location, resource_note, line_count
+                FROM mission_section
+                WHERE mission_id=?
+                ORDER BY section_order, section_id
+                """,
+                (mission_id,),
+            ).fetchall()
             line_rows = connection.execute(
                 """
-                SELECT story_path, line_order, line_type, talk_sentence_id, speaker_hash, text_hash
-                FROM mission_line
-                WHERE mission_id=?
+                SELECT ml.section_id, ml.story_path, ml.line_order, ml.section_order, ml.line_type,
+                       ml.talk_sentence_id, ml.speaker_hash, ml.speaker_text, ml.text_hash,
+                       ml.text_content, ml.option_group_id, ml.option_index, ml.branch_index
+                FROM mission_line ml
+                WHERE ml.mission_id=?
                 ORDER BY line_order
                 """,
                 (mission_id,),
             ).fetchall()
-            lines = [
-                self._build_dialogue_line(
+            version_tag_map = self._get_version_tag_map(connection)
+            text_version_by_hash = self._query_text_versions_by_hashes(
+                connection,
+                [str(row["text_hash"]) for row in line_rows if row["text_hash"]],
+            )
+            lines_by_section: dict[int, list[dict[str, object]]] = defaultdict(list)
+            lines: list[dict[str, object]] = []
+            for row in line_rows:
+                line = self._build_dialogue_line(
                     resolver,
                     row,
                     source_lang=normalized_source_lang,
@@ -781,8 +800,46 @@ class TextMapService:
                     player_name=normalized_player_name,
                     player_gender=normalized_player_gender,
                 )
-                for row in line_rows
-            ]
+                text_versions = text_version_by_hash.get(str(row["text_hash"] or ""))
+                if text_versions:
+                    created_version = version_tag_map.get(text_versions[0], "")
+                    updated_version = version_tag_map.get(text_versions[1], "")
+                    if created_version:
+                        line["createdVersion"] = created_version
+                    if updated_version:
+                        line["updatedVersion"] = updated_version
+                lines.append(line)
+                if row["section_id"] is not None:
+                    lines_by_section[int(row["section_id"])].append(line)
+            sections = []
+            for section in section_rows:
+                section_id = int(section["section_id"])
+                section_title = resolver.get_normalized_text(
+                    section["title_hash"],
+                    normalized_source_lang,
+                    prefer_main=True,
+                    player_name=normalized_player_name,
+                    player_gender=normalized_player_gender,
+                ) or str(section["fallback_title"] or f"子任务 {section_id}")
+                section_description = resolver.get_normalized_text(
+                    section["description_hash"],
+                    normalized_source_lang,
+                    prefer_main=True,
+                    player_name=normalized_player_name,
+                    player_gender=normalized_player_gender,
+                )
+                sections.append(
+                    {
+                        "sectionId": section_id,
+                        "index": int(section["section_order"] or 0),
+                        "title": section_title,
+                        "description": section_description,
+                        "location": str(section["location"] or ""),
+                        "resourceNote": str(section["resource_note"] or ""),
+                        "lineCount": int(section["line_count"] or len(lines_by_section.get(section_id, []))),
+                        "lines": lines_by_section.get(section_id, []),
+                    }
+                )
             return {
                 "kind": "mission",
                 "missionId": mission_id,
@@ -790,6 +847,7 @@ class TextMapService:
                 "storyPaths": json.loads(mission["story_paths_json"] or "[]"),
                 "createdVersion": self._resolve_version_tag(connection, mission["created_version_id"]),
                 "updatedVersion": self._resolve_version_tag(connection, mission["updated_version_id"]),
+                "sections": sections,
                 "lines": lines,
             }
 
@@ -1165,12 +1223,23 @@ class TextMapService:
                 page=page,
                 size=size,
             )
+            resolver = TextMapCache(connection)
             results = [
                 {
                     "entityType": entity_type,
                     "entityKey": str(row["entity_key"]),
                     "title": row["title_text"],
-                    "preview": row["preview_text"],
+                    "preview": (
+                        self._build_mission_dialogue_match_preview(
+                            connection,
+                            resolver,
+                            mission_id=int(row["entity_key"]),
+                            keyword=keyword_text,
+                            lang_code=normalized_language,
+                        )
+                        if entity_type == "mission"
+                        else row["preview_text"]
+                    ),
                     "createdVersion": self._resolve_version_tag(connection, row["created_version_id"]),
                     "updatedVersion": self._resolve_version_tag(connection, row["updated_version_id"]),
                     "detailQuery": self._build_detail_query(entity_type, str(row["entity_key"])),
@@ -1187,6 +1256,43 @@ class TextMapService:
             "total": total,
             "results": results,
         }
+
+    def _build_mission_dialogue_match_preview(
+        self,
+        connection: sqlite3.Connection,
+        resolver: TextMapCache,
+        *,
+        mission_id: int,
+        keyword: str,
+        lang_code: str,
+    ) -> str:
+        if not keyword:
+            return ""
+
+        rows = connection.execute(
+            """
+            SELECT speaker_hash, speaker_text, text_hash, text_content
+            FROM mission_line
+            WHERE mission_id=?
+            ORDER BY line_order
+            """,
+            (mission_id,),
+        ).fetchall()
+
+        matched_lines = []
+        for row in rows:
+            speaker = resolver.get_normalized_text(row["speaker_hash"], lang_code, prefer_main=True) or str(row["speaker_text"] or "")
+            content = resolver.get_normalized_text(row["text_hash"], lang_code) or str(row["text_content"] or "")
+            if not content:
+                continue
+            line_text = f"{speaker}: {content}" if speaker else content
+            if not self._matches_text(line_text, keyword):
+                continue
+            matched_lines.append(summarize_text(line_text, limit=96))
+            if len(matched_lines) >= 3:
+                break
+
+        return " ".join(matched_lines)
 
     def _build_talk_search_query_parts(
         self,
@@ -1805,6 +1911,30 @@ class TextMapService:
             for row in connection.execute("SELECT id, version_tag FROM version_dim").fetchall()
         }
 
+    def _query_text_versions_by_hashes(
+        self,
+        connection: sqlite3.Connection,
+        hashes: list[str],
+    ) -> dict[str, tuple[int, int]]:
+        unique_hashes = list(dict.fromkeys(hash_value for hash_value in hashes if hash_value))
+        if not unique_hashes:
+            return {}
+        placeholders = ",".join("?" for _ in unique_hashes)
+        rows = connection.execute(
+            f"""
+            SELECT hash, MIN(created_version_id) AS created_version_id,
+                   MAX(updated_version_id) AS updated_version_id
+            FROM text_map
+            WHERE hash IN ({placeholders})
+            GROUP BY hash
+            """,
+            unique_hashes,
+        ).fetchall()
+        return {
+            str(row["hash"]): (int(row["created_version_id"] or 0), int(row["updated_version_id"] or 0))
+            for row in rows
+        }
+
     def _build_text_search_result(
         self,
         connection: sqlite3.Connection,
@@ -2050,7 +2180,7 @@ class TextMapService:
             prefer_main=True,
             player_name=player_name,
             player_gender=player_gender,
-        )
+        ) or str(row["speaker_text"] or "")
         translates = self._resolve_translations(
             resolver,
             row["text_hash"],
@@ -2058,13 +2188,25 @@ class TextMapService:
             player_name=player_name,
             player_gender=player_gender,
         )
-        return {
+        if not translates and row["text_content"]:
+            translates[source_lang] = str(row["text_content"])
+        line: dict[str, object] = {
             "lineOrder": int(row["line_order"]),
+            "sectionOrder": int(row["section_order"] or 0),
             "lineType": str(row["line_type"]),
-            "talkSentenceId": int(row["talk_sentence_id"]),
+            "talkSentenceId": int(row["talk_sentence_id"]) if row["talk_sentence_id"] is not None else None,
             "speaker": speaker,
             "translates": translates,
         }
+        if row["story_path"]:
+            line["storyPath"] = str(row["story_path"])
+        if row["option_group_id"]:
+            line["optionGroupId"] = str(row["option_group_id"])
+        if row["option_index"] is not None:
+            line["optionIndex"] = int(row["option_index"])
+        if row["branch_index"] is not None:
+            line["branchIndex"] = int(row["branch_index"])
+        return line
 
     def _collect_message_reachable(
         self,

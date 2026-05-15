@@ -19,12 +19,11 @@ from data_paths import DATA_ROOT, DB_PATH
 from dbBuild.builder import (
     StarrailDatabaseBuilder,
     _vacuum_database,
-    extract_talk_sentence_refs,
     hash_text,
-    iter_mission_story_dirs,
     normalize_hash,
     parse_version,
 )
+from dbBuild.mission_dialogue import MissionDialogueExtractor
 
 
 TEXTMAP_NORMAL_PREFIX = "TextMap"
@@ -407,10 +406,6 @@ class SnapshotLoader:
         return result
 
     def _load_missions(self, talk_sentence_map: dict[int, TalkSentenceLite]) -> dict[int, str]:
-        mission_dirs = list(iter_mission_story_dirs(self.story_root))
-        if not mission_dirs:
-            return {}
-
         mission_name_hash: dict[int, str | None] = {}
         for row in self._load_json(self.excel_root / "MainMission.json", []):
             mission_id = row.get("MainMissionID")
@@ -419,39 +414,48 @@ class SnapshotLoader:
             mission_name_hash[int(mission_id)] = normalize_hash(row.get("Name"))
 
         tracked_ids = set(self.tracking.mission_ids)
+        extractor = MissionDialogueExtractor(self.root, talk_sentence_map)
         snapshot: dict[int, str] = {}
-        for mission_id, mission_dir_paths in mission_dirs:
+        for mission_id in sorted(tracked_ids):
             if mission_id not in tracked_ids:
                 continue
 
-            story_paths: list[str] = []
-            lines: list[tuple[str, str, int, str | None, str | None]] = []
-            for mission_dir in mission_dir_paths:
-                for story_path in sorted(mission_dir.glob("*.json")):
-                    relative_path = str(story_path.relative_to(self.root))
-                    story_paths.append(relative_path)
-                    payload = self._load_json(story_path, {})
-                    for talk_sentence_id, line_type in extract_talk_sentence_refs(payload):
-                        talk_sentence = talk_sentence_map.get(int(talk_sentence_id))
-                        lines.append(
-                            (
-                                relative_path,
-                                str(line_type),
-                                int(talk_sentence_id),
-                                talk_sentence.speaker_hash if talk_sentence else None,
-                                talk_sentence.text_hash if talk_sentence else None,
-                            )
-                        )
+            context = extractor.extract_mission(mission_id)
+            sections = []
+            for section in context.sections:
+                lines = [
+                    (
+                        line.source_path,
+                        line.line_type,
+                        line.talk_sentence_id,
+                        line.speaker_hash,
+                        line.speaker_text,
+                        line.text_hash,
+                        line.text_content,
+                        line.option_group_id,
+                        line.option_index,
+                        line.branch_index,
+                    )
+                    for line in section.lines
+                ]
+                sections.append(
+                    {
+                        "section_id": section.section_id,
+                        "title_hash": section.title_hash,
+                        "description_hash": section.description_hash,
+                        "lines": lines,
+                    }
+                )
 
-            if not story_paths and not lines and mission_id not in mission_name_hash:
+            if not context.story_paths and not sections and mission_id not in mission_name_hash:
                 continue
             snapshot[mission_id] = hash_text(
                 {
                     "mission_id": mission_id,
                     "mission_type": "main",
                     "name_hash": mission_name_hash.get(mission_id),
-                    "story_paths": story_paths,
-                    "lines": lines,
+                    "story_paths": context.story_paths,
+                    "sections": sections,
                 }
             )
         return snapshot

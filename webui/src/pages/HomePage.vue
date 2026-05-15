@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { appState, ensureMetaLoaded, getViewState, saveViewState } from '@/stores/appState'
+import { formatDisplayVersion } from '@/utils/versionDisplay'
 
 const route = useRoute()
 const contentPane = ref(null)
@@ -35,7 +36,7 @@ const activePath = computed(() => {
 })
 
 const pageTitle = computed(() => route.meta.title || '星铁文本搜索')
-const versionLabel = computed(() => appState.currentVersion || '当前版本未识别')
+const versionLabel = computed(() => formatDisplayVersion(appState.currentVersion) || '当前版本未识别')
 const menuMode = computed(() => (isCompactScreen.value ? 'horizontal' : 'vertical'))
 
 function updateScreenMode() {
@@ -274,26 +275,37 @@ watch(
 .navMenu {
   border-right: none;
   background: transparent;
-  --el-menu-hover-bg-color: rgba(122, 183, 255, 0.14);
-  --el-menu-hover-text-color: #f6f8ff;
+  --nav-menu-text: rgba(232, 238, 252, 0.8);
+  --nav-menu-hover-bg: rgba(122, 183, 255, 0.14);
+  --nav-menu-hover-text: #f6f8ff;
+  --nav-menu-active-bg: linear-gradient(135deg, rgba(11, 22, 43, 0.96), rgba(19, 36, 64, 0.92));
+  --nav-menu-active-border: rgba(201, 146, 78, 0.54);
+  --nav-menu-active-text: #ffe4aa;
+  --el-menu-hover-bg-color: var(--nav-menu-hover-bg);
+  --el-menu-hover-text-color: var(--nav-menu-hover-text);
 }
 
 .navMenu :deep(.el-menu-item) {
   margin-bottom: 8px;
+  border: 1px solid transparent;
   border-radius: 16px;
-  color: rgba(232, 238, 252, 0.8);
-  transition: background-color 0.2s ease, color 0.2s ease;
+  color: var(--nav-menu-text);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, color 0.2s ease;
 }
 
 .navMenu :deep(.el-menu-item:hover),
 .navMenu :deep(.el-menu-item:focus-visible) {
-  color: #f6f8ff;
-  background: rgba(122, 183, 255, 0.14);
+  color: var(--nav-menu-hover-text);
+  background: var(--nav-menu-hover-bg);
 }
 
 .navMenu :deep(.el-menu-item.is-active) {
-  color: #0b1425;
-  background: linear-gradient(135deg, #f1d390, #7ab7ff);
+  border-color: var(--nav-menu-active-border);
+  color: var(--nav-menu-active-text);
+  background: var(--nav-menu-active-bg);
+  box-shadow:
+    inset 0 0 0 1px rgba(122, 183, 255, 0.12),
+    0 10px 24px rgba(5, 9, 19, 0.24);
 }
 
 .contentPane {

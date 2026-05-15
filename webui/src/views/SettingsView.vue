@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import {
@@ -9,6 +9,7 @@ import {
   playerGenderOptions,
   saveSearchPreferences
 } from '@/stores/appState'
+import { formatDisplayVersion } from '@/utils/versionDisplay'
 
 const selectedLanguage = ref('chs')
 const selectedSourceLanguage = ref('chs')
@@ -16,14 +17,6 @@ const selectedResultLanguages = ref([])
 const playerName = ref('开拓者')
 const playerGender = ref('both')
 const loading = ref(false)
-
-const transferData = computed(() =>
-  appState.languages.map((item) => ({
-    key: item.code,
-    label: item.label,
-    disabled: false
-  }))
-)
 
 onMounted(async () => {
   loading.value = true
@@ -74,7 +67,7 @@ function onSave() {
             <el-select
               v-model="selectedLanguage"
               class="languageSelect"
-              placeholder="请选择默认语言"
+              placeholder="选择语言"
             >
               <el-option
                 v-for="item in appState.languages"
@@ -89,7 +82,7 @@ function onSave() {
             <el-select
               v-model="selectedSourceLanguage"
               class="languageSelect"
-              placeholder="请选择来源语言"
+              placeholder="选择语言"
             >
               <el-option
                 v-for="item in appState.languages"
@@ -102,13 +95,23 @@ function onSave() {
         </div>
 
         <el-form-item label="结果语言">
-          <el-transfer
+          <el-select
             v-model="selectedResultLanguages"
-            class="resultLanguageTransfer"
-            :data="transferData"
-            :titles="['可选语言', '已选语言']"
-            target-order="push"
-          />
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            filterable
+            clearable
+            placeholder="选择结果语言"
+            class="languageSelect"
+          >
+            <el-option
+              v-for="item in appState.languages"
+              :key="`result-${item.code}`"
+              :label="item.label"
+              :value="item.code"
+            />
+          </el-select>
         </el-form-item>
 
         <div class="twoColumn">
@@ -137,7 +140,7 @@ function onSave() {
 
         <div class="infoRow">
           <span v-if="appState.currentVersion" class="versionChip">
-            当前数据库版本：{{ appState.currentVersion }}
+            当前数据库版本：{{ formatDisplayVersion(appState.currentVersion) }}
           </span>
           <span v-if="appState.dbPath" class="pathChip">
             {{ appState.dbPath }}
@@ -201,29 +204,13 @@ h2 {
   gap: 16px;
 }
 
-.languageSelect,
+.languageSelect {
+  width: 260px;
+  max-width: 100%;
+}
+
 .textInput {
   width: 100%;
-}
-
-.resultLanguageTransfer {
-  width: 100%;
-}
-
-.resultLanguageTransfer:deep(.el-transfer-panel) {
-  width: min(100%, 320px);
-  background: rgba(8, 16, 30, 0.82);
-  border-color: rgba(169, 127, 68, 0.24);
-}
-
-.resultLanguageTransfer:deep(.el-transfer-panel__header),
-.resultLanguageTransfer:deep(.el-transfer-panel__body),
-.resultLanguageTransfer:deep(.el-transfer-panel__filter) {
-  background: transparent;
-}
-
-.resultLanguageTransfer:deep(.el-transfer-panel__item) {
-  color: rgba(233, 239, 250, 0.82);
 }
 
 .genderGroup {
@@ -275,11 +262,6 @@ h2 {
   .settingsCard {
     padding: 20px;
     border-radius: 20px;
-  }
-
-  .resultLanguageTransfer:deep(.el-transfer) {
-    flex-direction: column;
-    align-items: stretch;
   }
 }
 </style>

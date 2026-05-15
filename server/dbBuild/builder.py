@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterable
 
 from data_paths import CONFIG_LEVEL_ROOT, DATA_ROOT, DB_PATH, DB_TMP_PATH, EXCEL_OUTPUT_ROOT, STORY_ROOT, TEXTMAP_ROOT
+from dbBuild.mission_dialogue import MissionDialogueExtractor
 
 
 DEFAULT_SOURCE_LANGUAGE = "chs"
@@ -145,18 +146,38 @@ CREATE TABLE IF NOT EXISTS mission (
     updated_version_id INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS mission_section (
+    section_id INTEGER PRIMARY KEY,
+    mission_id INTEGER NOT NULL REFERENCES mission(mission_id) ON DELETE CASCADE,
+    section_order INTEGER NOT NULL,
+    title_hash TEXT,
+    fallback_title TEXT,
+    description_hash TEXT,
+    location TEXT,
+    resource_note TEXT,
+    line_count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS mission_line (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mission_id INTEGER NOT NULL REFERENCES mission(mission_id) ON DELETE CASCADE,
+    section_id INTEGER REFERENCES mission_section(section_id) ON DELETE CASCADE,
     story_path TEXT NOT NULL,
     line_order INTEGER NOT NULL,
+    section_order INTEGER NOT NULL DEFAULT 0,
     line_type TEXT NOT NULL,
-    talk_sentence_id INTEGER NOT NULL,
+    talk_sentence_id INTEGER,
     speaker_hash TEXT,
-    text_hash TEXT
+    speaker_text TEXT,
+    text_hash TEXT,
+    text_content TEXT,
+    option_group_id TEXT,
+    option_index INTEGER,
+    branch_index INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS mission_line_mission_order_index ON mission_line(mission_id, line_order);
+CREATE INDEX IF NOT EXISTS mission_line_section_order_index ON mission_line(section_id, section_order);
 
 CREATE TABLE IF NOT EXISTS book (
     book_id INTEGER PRIMARY KEY,
@@ -879,6 +900,7 @@ class StarrailDatabaseBuilder:
         version_id: int,
     ) -> None:
         connection.execute("DELETE FROM mission_line")
+        connection.execute("DELETE FROM mission_section")
         connection.execute("DELETE FROM mission")
 
         mission_name_hash: dict[int, str | None] = {}
@@ -888,28 +910,59 @@ class StarrailDatabaseBuilder:
                 continue
             mission_name_hash[int(mission_id)] = normalize_hash(row.get("Name"))
 
-        mission_rows = []
-        line_rows = []
+        story_dir_paths_by_mission: dict[int, list[str]] = {}
         for mission_id, mission_dirs in iter_mission_story_dirs(STORY_ROOT):
-            story_paths: list[str] = []
-            line_count = 0
+            paths: list[str] = []
             for mission_dir in mission_dirs:
                 for story_path in sorted(mission_dir.glob("*.json")):
-                    story_paths.append(str(story_path.relative_to(DATA_ROOT)))
-                    payload = json_load(story_path)
-                    talk_refs = extract_talk_sentence_refs(payload)
-                    for offset, (talk_sentence_id, line_type) in enumerate(talk_refs):
-                        talk_sentence = talk_sentence_map.get(talk_sentence_id)
-                        line_rows.append((
-                            mission_id,
-                            str(story_path.relative_to(DATA_ROOT)),
-                            line_count + offset,
-                            line_type,
-                            talk_sentence_id,
-                            talk_sentence.speaker_hash if talk_sentence else None,
-                            talk_sentence.text_hash if talk_sentence else None,
-                        ))
-                    line_count += len(talk_refs)
+                    paths.append(str(story_path.relative_to(DATA_ROOT)))
+            story_dir_paths_by_mission[mission_id] = paths
+
+        extractor = MissionDialogueExtractor(DATA_ROOT, talk_sentence_map)
+        mission_ids = sorted(set(mission_name_hash) | set(story_dir_paths_by_mission))
+        mission_rows = []
+        section_rows = []
+        line_rows = []
+        for mission_id in mission_ids:
+            context = extractor.extract_mission(mission_id)
+            story_paths: list[str] = []
+            seen_story_paths: set[str] = set()
+            for path in [*context.story_paths, *story_dir_paths_by_mission.get(mission_id, [])]:
+                if path in seen_story_paths:
+                    continue
+                seen_story_paths.add(path)
+                story_paths.append(path)
+            line_count = 0
+            for section in context.sections:
+                section_rows.append((
+                    section.section_id,
+                    mission_id,
+                    section.order,
+                    section.title_hash,
+                    section.fallback_title,
+                    section.description_hash,
+                    section.location,
+                    section.resource_note,
+                    len(section.lines),
+                ))
+                for section_order, line in enumerate(section.lines):
+                    line_rows.append((
+                        mission_id,
+                        section.section_id,
+                        line.source_path,
+                        line_count,
+                        section_order,
+                        line.line_type,
+                        line.talk_sentence_id,
+                        line.speaker_hash,
+                        line.speaker_text,
+                        line.text_hash,
+                        line.text_content,
+                        line.option_group_id,
+                        line.option_index,
+                        line.branch_index,
+                    ))
+                    line_count += 1
             mission_rows.append((
                 mission_id,
                 "main",
@@ -930,8 +983,22 @@ class StarrailDatabaseBuilder:
         )
         connection.executemany(
             """
-            INSERT INTO mission_line(mission_id, story_path, line_order, line_type, talk_sentence_id, speaker_hash, text_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO mission_section(
+                section_id, mission_id, section_order, title_hash, fallback_title,
+                description_hash, location, resource_note, line_count
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            section_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO mission_line(
+                mission_id, section_id, story_path, line_order, section_order, line_type,
+                talk_sentence_id, speaker_hash, speaker_text, text_hash, text_content,
+                option_group_id, option_index, branch_index
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             line_rows,
         )
@@ -1244,6 +1311,14 @@ class StarrailDatabaseBuilder:
         ).fetchall()
         for mission in mission_rows:
             text_hashes = [(mission["name_hash"], "title", 0)]
+            section_rows = connection.execute(
+                "SELECT title_hash, description_hash, section_order FROM mission_section WHERE mission_id=? ORDER BY section_order",
+                (mission["mission_id"],),
+            ).fetchall()
+            for section in section_rows:
+                sort_order = int(section["section_order"] or 0)
+                text_hashes.append((section["title_hash"], "title", sort_order))
+                text_hashes.append((section["description_hash"], "description", sort_order))
             line_rows = connection.execute(
                 "SELECT text_hash, speaker_hash, line_order FROM mission_line WHERE mission_id=? ORDER BY line_order",
                 (mission["mission_id"],),
@@ -1432,34 +1507,62 @@ class StarrailDatabaseBuilder:
         )
 
     def _rebuild_talk_sentence_versions(self, connection: sqlite3.Connection, current_version_id: int) -> None:
+        connection.execute("CREATE INDEX IF NOT EXISTS text_map_hash_scope_index ON text_map(hash, scope)")
+        connection.execute("DROP TABLE IF EXISTS temp_talk_sentence_hash")
+        connection.execute(
+            """
+            CREATE TEMP TABLE temp_talk_sentence_hash(
+                talk_sentence_id INTEGER NOT NULL,
+                text_hash TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO temp_talk_sentence_hash(talk_sentence_id, text_hash)
+            SELECT talk_sentence_id, speaker_hash
+            FROM talk_sentence
+            WHERE speaker_hash IS NOT NULL
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO temp_talk_sentence_hash(talk_sentence_id, text_hash)
+            SELECT talk_sentence_id, text_hash
+            FROM talk_sentence
+            WHERE text_hash IS NOT NULL
+            """
+        )
+        connection.execute("CREATE INDEX temp_talk_sentence_hash_hash_index ON temp_talk_sentence_hash(text_hash)")
         connection.execute(
             """
             WITH hash_versions AS (
                 SELECT
-                    ts.talk_sentence_id AS talk_sentence_id,
+                    th.talk_sentence_id AS talk_sentence_id,
                     COALESCE(MIN(tm.created_version_id), ?) AS created_version_id,
                     COALESCE(MAX(tm.updated_version_id), ?) AS updated_version_id
-                FROM talk_sentence ts
-                LEFT JOIN text_map tm
+                FROM temp_talk_sentence_hash th
+                LEFT JOIN text_map tm INDEXED BY text_map_hash_scope_index
                     ON tm.scope='normal'
-                    AND tm.hash IN (ts.speaker_hash, ts.text_hash)
-                GROUP BY ts.talk_sentence_id
+                    AND tm.hash = th.text_hash
+                GROUP BY th.talk_sentence_id
             )
             UPDATE talk_sentence
-            SET created_version_id = (
+            SET created_version_id = COALESCE((
                     SELECT hash_versions.created_version_id
                     FROM hash_versions
                     WHERE hash_versions.talk_sentence_id = talk_sentence.talk_sentence_id
-                ),
-                updated_version_id = (
+                ), ?),
+                updated_version_id = COALESCE((
                     SELECT hash_versions.updated_version_id
                     FROM hash_versions
                     WHERE hash_versions.talk_sentence_id = talk_sentence.talk_sentence_id
-                )
+                ), ?)
             """
             ,
-            (current_version_id, current_version_id),
+            (current_version_id, current_version_id, current_version_id, current_version_id),
         )
+        connection.execute("DROP TABLE IF EXISTS temp_talk_sentence_hash")
 
     def _build_mission_search_rows(
         self,
@@ -1473,13 +1576,13 @@ class StarrailDatabaseBuilder:
         for mission in missions:
             title = resolver.get_normalized_text(mission["name_hash"], lang, prefer_main=True) or f"任务 {mission['mission_id']}"
             line_rows = cursor.execute(
-                "SELECT speaker_hash, text_hash FROM mission_line WHERE mission_id=? ORDER BY line_order LIMIT 12",
+                "SELECT speaker_hash, speaker_text, text_hash, text_content FROM mission_line WHERE mission_id=? ORDER BY line_order LIMIT 24",
                 (mission["mission_id"],),
             ).fetchall()
             line_texts = []
             for row in line_rows:
-                speaker = resolver.get_normalized_text(row["speaker_hash"], lang, prefer_main=True)
-                content = resolver.get_normalized_text(row["text_hash"], lang)
+                speaker = resolver.get_normalized_text(row["speaker_hash"], lang, prefer_main=True) or str(row["speaker_text"] or "")
+                content = resolver.get_normalized_text(row["text_hash"], lang) or str(row["text_content"] or "")
                 if speaker and content:
                     line_texts.append(f"{speaker}: {content}")
                 elif content:

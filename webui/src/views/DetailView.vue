@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 
 import {
   fetchBookDetail,
@@ -12,10 +13,11 @@ import {
   fetchVoiceDetail
 } from '@/api/textSearch'
 import DetailTranslations from '@/components/DetailTranslations.vue'
+import StylizedText from '@/components/StylizedText.vue'
 import VersionBadges from '@/components/VersionBadges.vue'
 import { appState, ensureMetaLoaded, getSearchPreferences } from '@/stores/appState'
 import { buildDetailLocation } from '@/utils/detailRoute'
-import { toCopyableText } from '@/utils/textContent'
+import { toCopyableText, toPlainText } from '@/utils/textContent'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,6 +27,7 @@ const errorMessage = ref('')
 const detail = ref(null)
 const activeSectionId = ref(null)
 const selectedOptionKeys = ref({})
+const showMissionLineVersions = ref(false)
 
 const languageLabelMap = computed(() =>
   Object.fromEntries(appState.languages.map((item) => [item.code, item.label]))
@@ -38,20 +41,20 @@ const detailTitle = computed(() => {
     return '详情'
   }
   if (payload.kind === 'mission') {
-    return toCopyableText(payload.title || '') || '任务详情'
+    return toPlainText(payload.title || '') || '任务详情'
   }
   if (payload.kind === 'book') {
-    return toCopyableText(payload.title || '') || '书籍详情'
+    return toPlainText(payload.title || '') || '书籍详情'
   }
   if (payload.kind === 'talk') {
-    return toCopyableText(payload.title || '') || `TalkSentenceID ${payload.talkSentenceId || ''}`.trim()
+    return toPlainText(payload.title || '') || `TalkSentenceID ${payload.talkSentenceId || ''}`.trim()
   }
   if (payload.kind === 'message') {
-    return toCopyableText(payload.displayName || '') || '短信详情'
+    return toPlainText(payload.displayName || '') || '短信详情'
   }
   if (payload.kind === 'voice' || payload.kind === 'story') {
     const title = [payload.avatarName, payload.title]
-      .map((item) => toCopyableText(item || ''))
+      .map((item) => toPlainText(item || ''))
       .filter(Boolean)
       .join(' · ')
     return title || '详情'
@@ -75,6 +78,51 @@ const visibleMessageSections = computed(() => {
     ...section,
     displayEntries: expandMessageNodes(section.sectionId, section.nodes)
   }))
+})
+
+const missionSections = computed(() => {
+  if (detail.value?.kind !== 'mission') {
+    return []
+  }
+  const sections = detail.value.sections || []
+  if (sections.length) {
+    return sections
+  }
+  return [
+    {
+      sectionId: 0,
+      index: 1,
+      title: detailTitle.value,
+      description: '',
+      location: '',
+      resourceNote: '',
+      lineCount: detail.value.lines?.length || 0,
+      lines: detail.value.lines || []
+    }
+  ]
+})
+
+const missionDisplayLanguages = computed(() => {
+  const preferences = getSearchPreferences()
+  const seen = new Set()
+  const languages = []
+  for (const code of preferences.resultLanguages || []) {
+    if (!seen.has(code)) {
+      seen.add(code)
+      languages.push(code)
+    }
+  }
+  for (const section of missionSections.value) {
+    for (const line of section.lines || []) {
+      for (const code of Object.keys(line.translates || {})) {
+        if (!seen.has(code)) {
+          seen.add(code)
+          languages.push(code)
+        }
+      }
+    }
+  }
+  return languages
 })
 
 watch(
@@ -207,6 +255,48 @@ function resolveSenderLabel(node) {
   return '对方'
 }
 
+function resolveDialogueSpeakerLabel(line) {
+  if (line?.speaker) {
+    return line.speaker
+  }
+  return line?.lineType === 'option' ? '选项' : '旁白'
+}
+
+function missionLineTranslation(line, langCode) {
+  return line?.translates?.[langCode] || ''
+}
+
+function isCopyableMissionLine(line, langCode) {
+  return Boolean(toPlainText(missionLineTranslation(line, langCode)))
+}
+
+async function copyMissionLine(line, langCode) {
+  const text = toCopyableText(missionLineTranslation(line, langCode))
+  if (!text) {
+    ElMessage.warning('没有可复制的文本')
+    return
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success('已复制')
+      return
+    }
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'absolute'
+    textarea.style.left = '-9999px'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    ElMessage.success('已复制')
+  } catch (error) {
+    ElMessage.error('复制失败，请手动选择文本')
+  }
+}
+
 function buildOptionSelectionKeyForNode(sectionId, node, fallbackKey) {
   if (node?.groupId != null) {
     return `${sectionId}:${node.groupId}`
@@ -299,20 +389,93 @@ function expandMessageNodes(sectionId, nodes) {
       <el-skeleton animated :rows="10" />
     </div>
 
-    <div v-else-if="detail?.kind === 'mission'" class="panel">
-      <p class="subMeta">任务文件：{{ (detail.storyPaths || []).join(' · ') || '无' }}</p>
-      <div class="dialogueList">
-        <article v-for="line in detail.lines" :key="`mission-${line.lineOrder}`" class="dialogueCard">
-          <div class="dialogueHead">
-            <span class="orderTag">#{{ line.lineOrder + 1 }}</span>
-            <span v-if="line.lineType" class="typeTag">{{ line.lineType }}</span>
-            <strong>{{ line.speaker || '旁白' }}</strong>
+    <div v-else-if="detail?.kind === 'mission'" class="missionDetail">
+      <div class="missionToolbar">
+        <el-switch
+          v-model="showMissionLineVersions"
+          active-text="显示文本版本"
+        />
+      </div>
+
+      <div class="missionSectionList">
+        <article
+          v-for="section in missionSections"
+          :key="section.sectionId"
+          class="missionSectionCard"
+        >
+          <div class="sectionHeader">
+            <div>
+              <p class="summaryLabel">Step {{ section.index }}</p>
+              <h3>{{ section.title }}</h3>
+              <p v-if="section.description" class="sectionDescription">{{ section.description }}</p>
+              <p v-if="section.location" class="sectionLocation">{{ section.location }}</p>
+            </div>
+            <div class="metaRow">
+              <span class="metaTag">{{ section.lineCount }} 条</span>
+              <span v-if="section.sectionId" class="metaTag">SubMission {{ section.sectionId }}</span>
+            </div>
           </div>
-          <DetailTranslations
-            :translations="line.translates"
-            :language-labels="languageLabelMap"
-            compact
+
+          <el-alert
+            v-if="section.resourceNote"
+            type="warning"
+            :closable="false"
+            :title="section.resourceNote"
+            show-icon
           />
+
+          <el-table
+            v-if="section.lines?.length"
+            :data="section.lines"
+            class="missionDialogueTable"
+          >
+            <el-table-column label="说话人" width="132">
+              <template #default="{ row }">
+                <strong class="speakerCell">{{ resolveDialogueSpeakerLabel(row) }}</strong>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-if="showMissionLineVersions"
+              label="版本"
+              width="132"
+            >
+              <template #default="{ row }">
+                <div class="rowVersionTags">
+                  <span v-if="row.createdVersion" class="metaTag">创建 {{ row.createdVersion }}</span>
+                  <span
+                    v-if="row.updatedVersion && row.updatedVersion !== row.createdVersion"
+                    class="metaTag"
+                  >
+                    更新 {{ row.updatedVersion }}
+                  </span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-for="langCode in missionDisplayLanguages"
+              :key="langCode"
+              :label="languageLabelMap[langCode] || langCode.toUpperCase()"
+              min-width="260"
+            >
+              <template #default="{ row }">
+                <div class="missionTextCell">
+                  <StylizedText
+                    :text="missionLineTranslation(row, langCode)"
+                    class="missionLineText"
+                  />
+                  <el-button
+                    v-if="isCopyableMissionLine(row, langCode)"
+                    size="small"
+                    class="copyLineButton"
+                    @click="copyMissionLine(row, langCode)"
+                  >
+                    复制
+                  </el-button>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+          <p v-else class="missionEmptyText">暂无可展示对白</p>
         </article>
       </div>
     </div>
@@ -559,6 +722,91 @@ function expandMessageNodes(sectionId, nodes) {
   background: rgba(9, 18, 34, 0.78);
 }
 
+.missionDetail {
+  display: grid;
+  gap: 16px;
+}
+
+.missionToolbar {
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.missionSectionList {
+  display: grid;
+  gap: 16px;
+}
+
+.missionSectionCard {
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(10, 20, 37, 0.7);
+  border: 1px solid rgba(122, 183, 255, 0.14);
+  display: grid;
+  gap: 14px;
+}
+
+.sectionDescription,
+.sectionLocation {
+  margin: 6px 0 0;
+  color: rgba(223, 231, 246, 0.72);
+  line-height: 1.7;
+}
+
+.missionDialogueTable {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(255, 255, 255, 0.06);
+  --el-table-border-color: rgba(126, 153, 201, 0.16);
+  --el-table-text-color: rgba(239, 244, 255, 0.92);
+  --el-table-header-text-color: rgba(239, 244, 255, 0.78);
+  --el-table-row-hover-bg-color: rgba(122, 183, 255, 0.12);
+  --el-table-current-row-bg-color: rgba(122, 183, 255, 0.14);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.missionDialogueTable :deep(.el-table__body tr:hover > td.el-table__cell),
+.missionDialogueTable :deep(.el-table__body tr.hover-row > td.el-table__cell) {
+  background-color: rgba(122, 183, 255, 0.12);
+}
+
+.missionEmptyText {
+  margin: 0;
+  padding: 24px 0;
+  color: rgba(223, 231, 246, 0.62);
+  text-align: center;
+}
+
+.missionTextCell {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.missionLineText {
+  min-width: 0;
+  flex: 1;
+}
+
+.copyLineButton {
+  flex-shrink: 0;
+}
+
+.speakerCell {
+  color: rgba(255, 246, 231, 0.92);
+}
+
+.rowVersionTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .headerPanel h2,
 .messageSummary h2,
 h3 {
@@ -589,8 +837,6 @@ h3 {
 }
 
 .metaTag,
-.orderTag,
-.typeTag,
 .sourceRole {
   padding: 4px 10px;
   border-radius: 999px;

@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import StylizedText from '@/components/StylizedText.vue'
 import VersionBadges from '@/components/VersionBadges.vue'
 import { buildDetailLocation } from '@/utils/detailRoute'
-import { toCopyableText } from '@/utils/textContent'
+import { toPlainText } from '@/utils/textContent'
 
 const props = defineProps({
   thread: {
@@ -21,7 +21,7 @@ const props = defineProps({
 const router = useRouter()
 
 const avatarText = computed(() => {
-  const name = toCopyableText(props.thread.displayName || '')
+  const name = toPlainText(props.thread.displayName || '')
   if (!name) {
     return '短信'
   }

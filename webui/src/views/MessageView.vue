@@ -11,6 +11,7 @@ import {
   getViewState,
   saveViewState
 } from '@/stores/appState'
+import { formatDisplayVersion } from '@/utils/versionDisplay'
 
 const PAGE_SIZE = 24
 const VIEW_KEY = 'message'
@@ -141,7 +142,7 @@ async function onSearch(page = 1) {
           <el-option
             v-for="item in appState.versions"
             :key="`message-created-${item}`"
-            :label="item"
+            :label="formatDisplayVersion(item)"
             :value="item"
           />
         </el-select>
@@ -150,7 +151,7 @@ async function onSearch(page = 1) {
           <el-option
             v-for="item in appState.versions"
             :key="`message-updated-${item}`"
-            :label="item"
+            :label="formatDisplayVersion(item)"
             :value="item"
           />
         </el-select>

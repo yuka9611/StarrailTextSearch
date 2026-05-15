@@ -18,6 +18,7 @@ import {
   saveViewState
 } from '@/stores/appState'
 import { buildDetailLocation } from '@/utils/detailRoute'
+import { formatDisplayVersion } from '@/utils/versionDisplay'
 
 const props = defineProps({
   kind: {
@@ -236,7 +237,7 @@ function openStoryDetail(entry) {
           <el-option
             v-for="item in appState.versions"
             :key="`${props.kind}-created-${item}`"
-            :label="item"
+            :label="formatDisplayVersion(item)"
             :value="item"
           />
         </el-select>
@@ -245,7 +246,7 @@ function openStoryDetail(entry) {
           <el-option
             v-for="item in appState.versions"
             :key="`${props.kind}-updated-${item}`"
-            :label="item"
+            :label="formatDisplayVersion(item)"
             :value="item"
           />
         </el-select>
